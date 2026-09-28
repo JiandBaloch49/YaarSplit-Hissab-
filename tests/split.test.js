@@ -1,0 +1,181 @@
+// split.test.js — tests for the pure bill-splitting math in src/logic/split.js.
+//
+// Uses Node's built-in test runner, so there's nothing to install.
+// Run with:  npm test
+//
+// Each test builds expenses the same way the app will: through
+// prepareExpense(), which checks the input and fills in the shares.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { splitAmount, prepareExpense, computeBalances, settleUp } from '../src/logic/split.js';
+
+const members = ['A', 'B', 'C', 'D'].map((id) => ({ id, name: id }));
+
+// --- Helpers to keep the test cases short ---
+
+// Build a valid expense, or fail the test with the error messages.
+function expense(input) {
+  const result = prepareExpense(input);
+  assert.ok(result.ok, `expected a valid expense, got: ${JSON.stringify(result.errors)}`);
+  return result.expense;
+}
+
+// Equal split: payers is { A: 600 }, forIds is ['A', 'B', 'C'].
+function equal(amount, payers, forIds) {
+  return expense({
+    amount,
+    category: 'food',
+    split_type: 'equal',
+    payers: Object.entries(payers).map(([member_id, amt]) => ({ member_id, amount: amt })),
+    participants: forIds.map((member_id) => ({ member_id })),
+  });
+}
+
+// Apply transfers to balances; everyone should end up at exactly 0.
+function assertSettlesToZero(balances, transfers) {
+  const left = { ...balances };
+  for (const t of transfers) {
+    assert.ok(t.amount > 0, 'transfer amounts must be positive');
+    left[t.fromId] += t.amount;
+    left[t.toId] -= t.amount;
+  }
+  for (const id of Object.keys(left)) {
+    assert.equal(left[id], 0, `${id} is not settled`);
+  }
+}
+
+// Transfers as sorted strings like "C->A 500", so order doesn't matter.
+function transferList(transfers) {
+  return transfers.map((t) => `${t.fromId}->${t.toId} ${t.amount}`).sort();
+}
+
+// The first case we ran: 3 meals with different people at each.
+function threeMeals() {
+  return [
+    equal(600, { A: 600 }, ['A', 'B', 'C']),
+    equal(800, { B: 800 }, ['A', 'B', 'C', 'D']),
+    equal(300, { C: 300 }, ['C', 'D']),
+  ];
+}
+
+// --- splitAmount ---
+
+test('splitAmount: 1000 among 3 gives 334, 333, 333', () => {
+  assert.deepEqual(splitAmount(1000, ['A', 'B', 'C']), { A: 334, B: 333, C: 333 });
+});
+
+// --- The original three-meal case ---
+
+test('three meals: balances', () => {
+  assert.deepEqual(computeBalances(members, threeMeals(), []), {
+    A: 200, B: 400, C: -250, D: -350,
+  });
+});
+
+test('three meals: settleUp', () => {
+  const balances = computeBalances(members, threeMeals(), []);
+  const transfers = settleUp(balances);
+  assert.deepEqual(transferList(transfers), ['C->A 200', 'C->B 50', 'D->B 350']);
+  assertSettlesToZero(balances, transfers);
+});
+
+test('payment: D paid B 350 reduces both balances', () => {
+  const payments = [{ fromId: 'D', toId: 'B', amount: 350 }];
+  const balances = computeBalances(members, threeMeals(), payments);
+  // Before the payment: B +400, D -350.
+  assert.deepEqual(balances, { A: 200, B: 50, C: -250, D: 0 });
+  assertSettlesToZero(balances, settleUp(balances));
+});
+
+// --- Expense model cases ---
+
+test('A paid 500 for D only', () => {
+  const e = equal(500, { A: 500 }, ['D']);
+  assert.deepEqual(computeBalances(members, [e], []), { A: 500, B: 0, C: 0, D: -500 });
+});
+
+test('dinner 2000, A paid 1200 + B paid 800, equal among A,B,C,D', () => {
+  const e = equal(2000, { A: 1200, B: 800 }, ['A', 'B', 'C', 'D']);
+  // Equal shares are calculated and stored when saving.
+  assert.deepEqual(
+    e.participants.map((p) => p.share),
+    [500, 500, 500, 500]
+  );
+  assert.deepEqual(computeBalances(members, [e], []), { A: 700, B: 300, C: -500, D: -500 });
+});
+
+test('dinner: settleUp settles everyone to 0', () => {
+  const e = equal(2000, { A: 1200, B: 800 }, ['A', 'B', 'C', 'D']);
+  const balances = computeBalances(members, [e], []);
+  const transfers = settleUp(balances);
+  assert.deepEqual(transferList(transfers), ['C->A 500', 'D->A 200', 'D->B 300']);
+  assertSettlesToZero(balances, transfers);
+});
+
+test('lunch 1200 paid by C, custom split A 500, B 350, C 350', () => {
+  const e = expense({
+    amount: 1200,
+    category: 'food',
+    split_type: 'custom',
+    payers: [{ member_id: 'C', amount: 1200 }],
+    participants: [
+      { member_id: 'A', share: 500 },
+      { member_id: 'B', share: 350 },
+      { member_id: 'C', share: 350 },
+    ],
+  });
+  assert.deepEqual(computeBalances(members, [e], []), { A: -500, B: -350, C: 850, D: 0 });
+});
+
+// --- Rejected expenses (must NOT be saved) ---
+
+test('rejects custom shares that are 50 short', () => {
+  const result = prepareExpense({
+    amount: 1200,
+    category: 'food',
+    split_type: 'custom',
+    payers: [{ member_id: 'C', amount: 1200 }],
+    participants: [
+      { member_id: 'A', share: 500 },
+      { member_id: 'B', share: 300 },
+      { member_id: 'C', share: 350 },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors, ['Shares add up to 1150 but the total is 1200 (50 short).']);
+});
+
+test('rejects a custom share of 0', () => {
+  const result = prepareExpense({
+    amount: 1200,
+    category: 'food',
+    split_type: 'custom',
+    payers: [{ member_id: 'C', amount: 1200 }],
+    participants: [
+      { member_id: 'A', share: 600 },
+      { member_id: 'B', share: 0 },
+      { member_id: 'C', share: 600 },
+    ],
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors, ['Remove B or give them a share.']);
+});
+
+test('rejects payers over the total and an unknown category', () => {
+  const result = prepareExpense({
+    amount: 2000,
+    category: 'drinks',
+    split_type: 'equal',
+    payers: [
+      { member_id: 'A', amount: 1200 },
+      { member_id: 'B', amount: 900 },
+    ],
+    participants: [{ member_id: 'A' }, { member_id: 'B' }],
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors, [
+    'Category must be one of: food, tea, transport, repair, shopping, other.',
+    'Payers add up to 2100 but the total is 2000 (100 too much).',
+  ]);
+});
