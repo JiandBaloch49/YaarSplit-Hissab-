@@ -53,9 +53,14 @@ export function addGroup(name) {
 }
 
 // All live groups, oldest first.
+//
+// About "ORDER BY created_at, rowid" (used in every list below): two rows
+// saved in the same millisecond have the same created_at. rowid is SQLite's
+// hidden row counter, which goes up with every insert on this phone, so it
+// breaks the tie in the order the rows were added.
 export function listGroups() {
   return getDb().getAllSync(
-    'SELECT * FROM groups WHERE deleted = 0 ORDER BY created_at'
+    'SELECT * FROM groups WHERE deleted = 0 ORDER BY created_at, rowid'
   );
 }
 
@@ -89,7 +94,7 @@ export function addMember(groupId, name) {
 // Live members of one group, in the order they were added.
 export function listMembers(groupId) {
   return getDb().getAllSync(
-    'SELECT * FROM members WHERE group_id = ? AND deleted = 0 ORDER BY created_at',
+    'SELECT * FROM members WHERE group_id = ? AND deleted = 0 ORDER BY created_at, rowid',
     [groupId]
   );
 }
@@ -214,7 +219,7 @@ export function addExpense(groupId, input) {
 // Live expenses of one group, newest first, with payers/participants as arrays.
 export function listExpenses(groupId) {
   const rows = getDb().getAllSync(
-    'SELECT * FROM expenses WHERE group_id = ? AND deleted = 0 ORDER BY created_at DESC',
+    'SELECT * FROM expenses WHERE group_id = ? AND deleted = 0 ORDER BY created_at DESC, rowid DESC',
     [groupId]
   );
   return rows.map(expenseFromRow);
@@ -283,7 +288,7 @@ export function addPayment(groupId, { fromId, toId, amount }) {
 // Live payments of one group, newest first, as { fromId, toId, amount, ... }.
 export function listPayments(groupId) {
   const rows = getDb().getAllSync(
-    'SELECT * FROM payments WHERE group_id = ? AND deleted = 0 ORDER BY created_at DESC',
+    'SELECT * FROM payments WHERE group_id = ? AND deleted = 0 ORDER BY created_at DESC, rowid DESC',
     [groupId]
   );
   return rows.map(paymentFromRow);
