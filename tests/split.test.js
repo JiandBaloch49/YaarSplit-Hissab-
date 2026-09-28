@@ -128,6 +128,25 @@ test('lunch 1200 paid by C, custom split A 500, B 350, C 350', () => {
   assert.deepEqual(computeBalances(members, [e], []), { A: -500, B: -350, C: 850, D: 0 });
 });
 
+test('names are not saved in payers/participants (they live in members)', () => {
+  for (const split_type of ['equal', 'custom']) {
+    const e = expense({
+      amount: 1000,
+      category: 'food',
+      split_type,
+      payers: [{ member_id: 'A', name: 'Ali', amount: 1000 }],
+      participants: [
+        { member_id: 'A', name: 'Ali', share: 500 },
+        { member_id: 'B', name: 'Bilal', share: 500 },
+      ],
+    });
+    // Only these exact keys may be stored in the JSON columns.
+    for (const p of e.payers) assert.deepEqual(Object.keys(p), ['member_id', 'amount']);
+    for (const p of e.participants) assert.deepEqual(Object.keys(p), ['member_id', 'share']);
+    assert.ok(!JSON.stringify(e.participants).includes('Bilal'));
+  }
+});
+
 // --- Rejected expenses (must NOT be saved) ---
 
 test('rejects custom shares that are 50 short', () => {
