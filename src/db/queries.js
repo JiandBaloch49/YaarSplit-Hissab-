@@ -1,11 +1,15 @@
 // queries.js — every read and write the app does on the database.
 //
-// Screens call these functions and never write SQL themselves. Each table
-// gets three kinds of function:
+// Screens call these functions and never write SQL themselves. The main
+// kinds of function:
 //   addX(...)       insert a new row (id and timestamps are filled in here)
 //   listX(...)      return the live rows (deleted = 0)
+//   renameX(...)    change a name (groups, members)
 //   deleteX(id)     SOFT delete: set deleted = 1 — rows are never removed
-//                   (deleteMember refuses if the member isn't settled up)
+//                   (deleteMember / deleteGroup refuse if not settled up)
+//   restoreX(id)    undo a soft delete (expenses, payments — for "Undo")
+//
+// Every change sets updated_at to now and synced back to 0.
 //
 // Expenses store payers/participants as JSON text in SQLite. This file is the
 // only place that converts: JSON.stringify when saving, JSON.parse when
@@ -13,7 +17,8 @@
 
 import * as Crypto from 'expo-crypto';
 import { getDb } from './database';
-import { prepareExpense, computeBalances } from '../logic/split';
+import { prepareExpense, computeBalances, summarizeGroup } from '../logic/split';
+import { formatRupees } from '../logic/format';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -34,6 +39,24 @@ function softDelete(table, id) {
   getDb().runSync(
     `UPDATE ${table} SET deleted = 1, updated_at = ?, synced = 0 WHERE id = ?`,
     [now(), id]
+  );
+}
+
+// Undo a soft delete: the row comes back exactly as it was (deleted = 0).
+// Same safety note as softDelete about `table`.
+function restore(table, id) {
+  getDb().runSync(
+    `UPDATE ${table} SET deleted = 0, updated_at = ?, synced = 0 WHERE id = ?`,
+    [now(), id]
+  );
+}
+
+// Change the name of a live row in `groups` or `members`.
+// Same safety note as softDelete about `table`.
+function rename(table, id, name) {
+  getDb().runSync(
+    `UPDATE ${table} SET name = ?, updated_at = ?, synced = 0 WHERE id = ? AND deleted = 0`,
+    [name, now(), id]
   );
 }
 
@@ -64,10 +87,36 @@ export function listGroups() {
   );
 }
 
-// Note: this only hides the group itself. Its members, expenses and payments
-// stay as they are — they can only be reached through the group anyway.
+// One live group by id, or null if it's gone.
+export function getGroup(id) {
+  return getDb().getFirstSync('SELECT * FROM groups WHERE id = ? AND deleted = 0', [id]);
+}
+
+export function renameGroup(id, name) {
+  rename('groups', id, name);
+}
+
+/**
+ * Soft-delete a group — but only if everyone in it is settled up, so no
+ * debt disappears along with it.
+ *
+ * Returns ONE of:
+ *   { ok: true }            — deleted
+ *   { ok: false, errors }   — not deleted; show these messages
+ *
+ * This only hides the group itself. Its members, expenses and payments stay
+ * as they are — they can only be reached through the group anyway.
+ */
 export function deleteGroup(id) {
+  const { toSettle } = summarizeGroup(listMembers(id), listExpenses(id), listPayments(id));
+  if (toSettle > 0) {
+    return {
+      ok: false,
+      errors: [`${formatRupees(toSettle)} is still to be settled. Settle up first.`],
+    };
+  }
   softDelete('groups', id);
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -99,9 +148,13 @@ export function listMembers(groupId) {
   );
 }
 
+export function renameMember(id, name) {
+  rename('members', id, name);
+}
+
 // Members of a group with these ids, INCLUDING removed ones (deleted = 1).
 //
-// Only for editing an old expense: it may mention someone who has since been
+// For showing or editing an old expense: it may mention someone who has since been
 // removed. The form needs their name so it can keep them in the expense —
 // otherwise saving would silently drop them and change everyone's balance.
 export function listMembersByIds(groupId, ids) {
@@ -299,6 +352,11 @@ export function deleteExpense(id) {
   softDelete('expenses', id);
 }
 
+// Undo deleteExpense (the "Undo" button after deleting).
+export function restoreExpense(id) {
+  restore('expenses', id);
+}
+
 // ---------------------------------------------------------------------------
 // Payments (one member paying another back)
 // ---------------------------------------------------------------------------
@@ -366,4 +424,9 @@ export function listPayments(groupId) {
 
 export function deletePayment(id) {
   softDelete('payments', id);
+}
+
+// Undo deletePayment (the "Undo" button after deleting).
+export function restorePayment(id) {
+  restore('payments', id);
 }

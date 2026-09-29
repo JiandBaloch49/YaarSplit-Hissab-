@@ -1,8 +1,8 @@
 // AddExpenseScreen.js — the form for adding OR editing an expense.
 //
-// Opened from the Expenses tab: "Add expense" opens it empty; tapping an
-// expense row opens it pre-filled (header says "Edit expense", see App.js),
-// with a "Delete expense" button at the bottom.
+// "Add expense" (Expenses tab) opens it empty. "Edit" on the Expense
+// details screen opens it pre-filled (header says "Edit expense", see
+// App.js). Deleting happens on the details screen, which offers Undo.
 //
 // Layout follows the design: a big centred amount, category and "Paid by"
 // as chips, and "For whom" as a checklist that shows each person's share
@@ -22,7 +22,7 @@
 //   expenseId  only when editing: which expense to load
 
 import { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AmountInput from '../components/AmountInput';
 import AppButton from '../components/AppButton';
@@ -33,7 +33,6 @@ import { ChevronDown, ChevronUp } from '../components/icons';
 import { colors, fonts, money, radius, text } from '../theme';
 import {
   addExpense,
-  deleteExpense,
   getExpense,
   listMembers,
   listMembersByIds,
@@ -248,23 +247,10 @@ export default function AddExpenseScreen({ route, navigation }) {
       setErrors(result.errors); // shown above the Save button; nothing saved
       return;
     }
-    navigation.goBack(); // GroupScreen reloads when it comes back into focus
+    // Back to where we came from (group or expense details) — both reload
+    // when they come back into focus.
+    navigation.goBack();
   }
-
-  function handleDelete() {
-    Alert.alert('Delete this expense?', 'It will be taken out of everyone’s balances.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          deleteExpense(expenseId); // soft delete: deleted = 1, synced = 0
-          navigation.goBack();
-        },
-      },
-    ]);
-  }
-
 
   if (form.notFound) {
     return (
@@ -430,7 +416,6 @@ export default function AddExpenseScreen({ route, navigation }) {
       <View style={styles.saveArea}>
         <ErrorList errors={errors} />
         <AppButton title="Save expense" onPress={handleSave} />
-        {editing && <AppButton title="Delete expense" variant="danger" onPress={handleDelete} />}
       </View>
     </ScrollView>
   );

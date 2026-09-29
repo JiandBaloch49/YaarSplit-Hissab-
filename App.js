@@ -10,8 +10,12 @@
 // up, so text never flashes in the wrong font.
 //
 // Navigation is a simple stack (React Navigation native-stack):
-//   Groups  →  Group (Expenses / Balances / Members tabs)  →  AddExpense
-//   (AddExpense is also used for editing an expense.)
+//   Groups  →  Group (Expenses / Balances / Members tabs)
+//             →  AddExpense                       (the "Add expense" button)
+//             →  ExpenseDetails  →  AddExpense    (tap a row, then "Edit")
+//
+// <UndoProvider> draws the "Expense deleted. Undo" bar on top of every
+// screen (see src/components/UndoBar.js).
 
 import { useEffect } from 'react';
 import { Pressable } from 'react-native';
@@ -31,6 +35,8 @@ import { initDatabase } from './src/db/database';
 import GroupsScreen from './src/screens/GroupsScreen';
 import GroupScreen from './src/screens/GroupScreen';
 import AddExpenseScreen from './src/screens/AddExpenseScreen';
+import ExpenseDetailsScreen from './src/screens/ExpenseDetailsScreen';
+import { UndoProvider } from './src/components/UndoBar';
 import { X } from './src/components/icons';
 import { colors, fonts } from './src/theme';
 
@@ -65,45 +71,52 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
-        <Stack.Navigator
-          initialRouteName="Groups"
-          // Defaults for every screen's standard header.
-          screenOptions={{
-            headerShadowVisible: false,
-            headerTintColor: colors.ink,
-            headerTitleStyle: { fontFamily: fonts.semibold, fontSize: 18, color: colors.ink },
-            contentStyle: { backgroundColor: colors.fog },
-          }}
-        >
-          {/* Groups and Group draw their own big titles, so no standard header. */}
-          <Stack.Screen name="Groups" component={GroupsScreen} options={{ headerShown: false }} />
-          <Stack.Screen name="Group" component={GroupScreen} options={{ headerShown: false }} />
-          <Stack.Screen
-            name="AddExpense"
-            component={AddExpenseScreen}
-            // Same screen for both: an expenseId in the params means editing.
-            // A centred title with an ✕ to close, on a white background.
-            options={({ route, navigation }) => ({
-              title: route.params.expenseId ? 'Edit expense' : 'Add expense',
-              headerTitleAlign: 'center',
-              headerStyle: { backgroundColor: colors.surface },
-              contentStyle: { backgroundColor: colors.surface },
-              headerLeft: () => (
-                <Pressable
-                  onPress={() => navigation.goBack()}
-                  accessibilityRole="button"
-                  accessibilityLabel="Close"
-                  hitSlop={12}
-                >
-                  <X size={24} color={colors.ink} strokeWidth={2.25} />
-                </Pressable>
-              ),
-            })}
-          />
-        </Stack.Navigator>
-        <StatusBar style="dark" />
-      </NavigationContainer>
+      <UndoProvider>
+        <NavigationContainer>
+          <Stack.Navigator
+            initialRouteName="Groups"
+            // Defaults for every screen's standard header.
+            screenOptions={{
+              headerShadowVisible: false,
+              headerTintColor: colors.ink,
+              headerTitleStyle: { fontFamily: fonts.semibold, fontSize: 18, color: colors.ink },
+              contentStyle: { backgroundColor: colors.fog },
+            }}
+          >
+            {/* Groups and Group draw their own big titles, so no standard header. */}
+            <Stack.Screen name="Groups" component={GroupsScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="Group" component={GroupScreen} options={{ headerShown: false }} />
+            <Stack.Screen
+              name="ExpenseDetails"
+              component={ExpenseDetailsScreen}
+              options={{ title: 'Expense details', headerStyle: { backgroundColor: colors.fog } }}
+            />
+            <Stack.Screen
+              name="AddExpense"
+              component={AddExpenseScreen}
+              // Same screen for both: an expenseId in the params means editing.
+              // A centred title with an ✕ to close, on a white background.
+              options={({ route, navigation }) => ({
+                title: route.params.expenseId ? 'Edit expense' : 'Add expense',
+                headerTitleAlign: 'center',
+                headerStyle: { backgroundColor: colors.surface },
+                contentStyle: { backgroundColor: colors.surface },
+                headerLeft: () => (
+                  <Pressable
+                    onPress={() => navigation.goBack()}
+                    accessibilityRole="button"
+                    accessibilityLabel="Close"
+                    hitSlop={12}
+                  >
+                    <X size={24} color={colors.ink} strokeWidth={2.25} />
+                  </Pressable>
+                ),
+              })}
+            />
+          </Stack.Navigator>
+          <StatusBar style="dark" />
+        </NavigationContainer>
+      </UndoProvider>
     </SafeAreaProvider>
   );
 }

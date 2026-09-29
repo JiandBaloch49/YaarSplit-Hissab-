@@ -1,23 +1,24 @@
 // MembersTab.js — the "Members" tab on the group screen.
 //
 // A box to add a friend by name, then a card listing the members, each with
-// their balance and a "Remove" button. Whether removing is allowed (balance
-// must be 0) is decided by deleteMember() in queries.js; GroupScreen shows
-// its message.
+// their balance and a "Remove" button. Tapping a member's name (marked with
+// a pencil) renames them. Whether removing is allowed (balance must be 0) is
+// decided by deleteMember() in queries.js; GroupScreen shows its message.
 //
 // Props:
 //   members         live members of the group
 //   balances        { [memberId]: rupees }, shown under each name
 //   onAddMember     called with the trimmed name
+//   onRenameMember  called with the member when their name is tapped
 //   onRemoveMember  called with the member when "Remove" is tapped
 
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AppButton from './AppButton';
 import Card from './Card';
 import { LetterTile } from './IconTile';
-import { Plus } from './icons';
+import { Pencil, Plus } from './icons';
 import { describeBalance } from '../logic/format';
 import { colors, fonts, radius, text } from '../theme';
 
@@ -28,7 +29,13 @@ function balanceColor(balance) {
   return colors.muted;
 }
 
-export default function MembersTab({ members, balances, onAddMember, onRemoveMember }) {
+export default function MembersTab({
+  members,
+  balances,
+  onAddMember,
+  onRenameMember,
+  onRemoveMember,
+}) {
   const insets = useSafeAreaInsets();
   const [name, setName] = useState('');
   const trimmed = name.trim();
@@ -65,15 +72,26 @@ export default function MembersTab({ members, balances, onAddMember, onRemoveMem
             const balance = balances[member.id] || 0;
             return (
               <View key={member.id} style={styles.row}>
-                <LetterTile letter={member.name[0].toUpperCase()} />
-                <View style={styles.info}>
-                  <Text style={styles.name} numberOfLines={1}>
-                    {member.name}
-                  </Text>
-                  <Text style={[styles.balance, { color: balanceColor(balance) }]}>
-                    {describeBalance(balance)}
-                  </Text>
-                </View>
+                {/* Tile + name + pencil = one tap target for renaming. */}
+                <Pressable
+                  onPress={() => onRenameMember(member)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Rename ${member.name}`}
+                  style={({ pressed }) => [styles.renameArea, pressed && styles.pressed]}
+                >
+                  <LetterTile letter={member.name[0].toUpperCase()} />
+                  <View style={styles.info}>
+                    <View style={styles.nameLine}>
+                      <Text style={styles.name} numberOfLines={1}>
+                        {member.name}
+                      </Text>
+                      <Pencil size={15} color={colors.muted} strokeWidth={2} />
+                    </View>
+                    <Text style={[styles.balance, { color: balanceColor(balance) }]}>
+                      {describeBalance(balance)}
+                    </Text>
+                  </View>
+                </Pressable>
                 <AppButton
                   title="Remove"
                   variant="danger"
@@ -123,13 +141,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
   },
+  renameArea: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  pressed: {
+    opacity: 0.6,
+  },
   info: {
     flex: 1,
     gap: 2,
   },
+  nameLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   name: {
     ...text.bodyStrong,
     fontSize: 17,
+    flexShrink: 1,
   },
   balance: {
     fontFamily: fonts.medium,

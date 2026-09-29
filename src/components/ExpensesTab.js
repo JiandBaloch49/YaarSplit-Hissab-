@@ -2,7 +2,7 @@
 //
 // Expenses are grouped by day ("Sunday, 28 Sep"), newest first. Each day is
 // one white card; each row shows the category icon, the title, "Hammal
-// paid, for 4", and the amount. Tapping a row opens it for editing.
+// paid, for 4", the amount, and an arrow. Tapping a row opens its details.
 // A floating "Add expense" button sits in the bottom-right corner.
 //
 // It only displays what it's given — loading and saving happen elsewhere.
@@ -12,13 +12,13 @@
 //   names          { [memberId]: name }
 //   canAdd         false when the group has no members yet
 //   onAddExpense   called when "Add expense" is tapped
-//   onOpenExpense  called with the expense when its row is tapped
+//   onOpenExpense  called with the expense when its row is tapped (opens details)
 
 import { Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AppButton from './AppButton';
 import { CategoryTile } from './IconTile';
-import { Plus } from './icons';
+import { ChevronRight, Plus } from './icons';
 import { categoryLabel, describeExpense, formatRupees, groupByDay } from '../logic/format';
 import { colors, fonts, money, radius, text } from '../theme';
 
@@ -76,7 +76,7 @@ function ExpenseRow({ expense, names, isFirst, isLast, onPress }) {
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityHint="Edit this expense"
+      accessibilityHint="Shows the details of this expense"
       style={({ pressed }) => [
         styles.row,
         isFirst && styles.rowFirst,
@@ -98,6 +98,8 @@ function ExpenseRow({ expense, names, isFirst, isLast, onPress }) {
         <Text style={styles.amount} numberOfLines={1}>
           {formatRupees(expense.amount)}
         </Text>
+        {/* The arrow shows the row can be tapped to see details. */}
+        <ChevronRight size={20} color={colors.muted} strokeWidth={2} />
       </View>
     </Pressable>
   );
