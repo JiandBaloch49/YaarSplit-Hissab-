@@ -80,6 +80,7 @@ test('describeExpense and describeGroup', () => {
   assert.equal(describeExpense(['Hammal'], ['A', 'B', 'C', 'D']), 'Hammal paid, for 4');
   assert.equal(describeExpense(['Naveed'], ['Zarak']), 'Naveed paid, for Zarak');
   assert.equal(describeExpense(['A', 'B'], ['A', 'B', 'C']), 'A & B paid, for 3');
+  assert.equal(describeExpense(['Hammal'], ['A', 'B', 'C', 'D'], true), 'Paid from fund, for 4');
   assert.equal(describeGroup(4, 8500), '4 friends, Rs 8,500 spent');
   assert.equal(describeGroup(1, 0), '1 friend, Rs 0 spent');
 });

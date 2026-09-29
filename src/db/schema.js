@@ -19,13 +19,17 @@
 // A group of friends who split bills together.
 export const CREATE_GROUPS_TABLE = `
   CREATE TABLE IF NOT EXISTS groups (
-    id           TEXT PRIMARY KEY NOT NULL,
-    name         TEXT NOT NULL,
+    id             TEXT PRIMARY KEY NOT NULL,
+    name           TEXT NOT NULL,
 
-    created_at   INTEGER NOT NULL,
-    updated_at   INTEGER NOT NULL,
-    deleted      INTEGER NOT NULL DEFAULT 0,
-    synced       INTEGER NOT NULL DEFAULT 0
+    -- The member holding the group fund's cash (members.id), or NULL when
+    -- the group has no fund. Can only change while the fund is at 0.
+    fund_holder_id TEXT,
+
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL,
+    deleted        INTEGER NOT NULL DEFAULT 0,
+    synced         INTEGER NOT NULL DEFAULT 0
   );
 `;
 
@@ -71,6 +75,10 @@ export const CREATE_EXPENSES_TABLE = `
     --   [{"member_id": "...", "share": 500}, ...]
     participants TEXT NOT NULL,
 
+    -- 1 = paid from the group fund. The payer is then always the fund
+    -- holder (queries.js makes sure of that).
+    from_fund    INTEGER NOT NULL DEFAULT 0,
+
     created_at   INTEGER NOT NULL,
     updated_at   INTEGER NOT NULL,
     deleted      INTEGER NOT NULL DEFAULT 0,
@@ -78,16 +86,22 @@ export const CREATE_EXPENSES_TABLE = `
   );
 `;
 
-// Money paid back directly from one member to another ("settling up").
+// Money handed directly from one member to another: paying someone back,
+// putting money into the group fund, or the fund holder returning leftover.
 export const CREATE_PAYMENTS_TABLE = `
   CREATE TABLE IF NOT EXISTS payments (
     id             TEXT PRIMARY KEY NOT NULL,
     group_id       TEXT NOT NULL,
-    from_member_id TEXT NOT NULL,   -- who paid the money back
+    from_member_id TEXT NOT NULL,   -- who gave the money
     to_member_id   TEXT NOT NULL,   -- who received it
 
     -- Whole rupees. Never a decimal.
     amount         INTEGER NOT NULL CHECK (amount > 0),
+
+    -- 'settlement' (paying back), 'contribution' (into the group fund) or
+    -- 'return' (leftover out of the fund). Allowed values live in split.js
+    -- (PAYMENT_TYPES), same as categories.
+    type           TEXT NOT NULL DEFAULT 'settlement',
 
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL,
@@ -95,6 +109,18 @@ export const CREATE_PAYMENTS_TABLE = `
     synced         INTEGER NOT NULL DEFAULT 0
   );
 `;
+
+// Columns added after the first release. Phones that already have the
+// tables need these added with ALTER TABLE ("CREATE TABLE IF NOT EXISTS"
+// never changes a table that already exists). database.js adds any that are
+// missing. New columns MUST have a DEFAULT (or allow NULL) so old rows get
+// a sensible value.
+//   [table, column, column definition]
+export const ADDED_COLUMNS = [
+  ['groups', 'fund_holder_id', 'TEXT'],
+  ['expenses', 'from_fund', 'INTEGER NOT NULL DEFAULT 0'],
+  ['payments', 'type', "TEXT NOT NULL DEFAULT 'settlement'"],
+];
 
 // Every CREATE statement, in the order database.js runs them.
 export const ALL_TABLES = [

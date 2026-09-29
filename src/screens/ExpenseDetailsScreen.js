@@ -8,6 +8,9 @@
 //   For whom      Hammal  Rs 750, Bilal Rs 750, ...
 //   Didn't join   Naveed
 //
+// For a group-fund expense, "Paid by" shows how much came out of the fund
+// and how much the holder added from their own pocket (if the fund ran out).
+//
 // "Edit" opens the expense form pre-filled. "Delete" soft-deletes it right
 // away and shows "Expense deleted. Undo" for 5 seconds.
 //
@@ -25,10 +28,14 @@ import { Pencil, Trash } from '../components/icons';
 import {
   deleteExpense,
   getExpense,
+  getGroup,
+  listExpenses,
   listMembers,
   listMembersByIds,
+  listPayments,
   restoreExpense,
 } from '../db/queries';
+import { fundSummary } from '../logic/split';
 import { categoryLabel, formatDay, formatRupees } from '../logic/format';
 import { colors, fonts, money, text } from '../theme';
 
@@ -52,7 +59,16 @@ function loadDetails(groupId, expenseId) {
   const participantIds = new Set(expense.participants.map((p) => p.member_id));
   const didntJoin = listMembers(groupId).filter((m) => !participantIds.has(m.id));
 
-  return { expense, names, didntJoin };
+  // For a fund expense: how much the fund covered, and any extra the holder
+  // paid themselves. fundSummary works that out in time order.
+  let fundPart = null;
+  if (expense.from_fund) {
+    const group = getGroup(groupId);
+    const fund = fundSummary(group || {}, listExpenses(groupId), listPayments(groupId));
+    fundPart = fund.history.find((h) => h.kind === 'out' && h.id === expense.id) || null;
+  }
+
+  return { expense, names, didntJoin, fundPart };
 }
 
 export default function ExpenseDetailsScreen({ route, navigation }) {
@@ -76,7 +92,7 @@ export default function ExpenseDetailsScreen({ route, navigation }) {
     );
   }
 
-  const { expense, names, didntJoin } = details;
+  const { expense, names, didntJoin, fundPart } = details;
   const nameOf = (id) => names[id] || 'Removed member';
   const title = expense.description || categoryLabel(expense.category);
 
@@ -109,16 +125,36 @@ export default function ExpenseDetailsScreen({ route, navigation }) {
 
         {/* --- Who paid, and how much each --- */}
         <Text style={styles.sectionTitle}>Paid by</Text>
-        <Card>
-          {expense.payers.map((payer) => (
-            <View key={payer.member_id} style={styles.row}>
+        {fundPart ? (
+          // Fund expense: the fund's part, then the holder's extra (if any).
+          <Card>
+            <View style={styles.row}>
               <Text style={styles.name} numberOfLines={1}>
-                {nameOf(payer.member_id)}
+                Group fund (held by {nameOf(fundPart.memberId)})
               </Text>
-              <Text style={styles.value}>{formatRupees(payer.amount)}</Text>
+              <Text style={styles.value}>{formatRupees(fundPart.fromFund)}</Text>
             </View>
-          ))}
-        </Card>
+            {fundPart.extra > 0 && (
+              <View style={styles.row}>
+                <Text style={styles.name} numberOfLines={1}>
+                  {nameOf(fundPart.memberId)}, out of pocket
+                </Text>
+                <Text style={styles.value}>{formatRupees(fundPart.extra)}</Text>
+              </View>
+            )}
+          </Card>
+        ) : (
+          <Card>
+            {expense.payers.map((payer) => (
+              <View key={payer.member_id} style={styles.row}>
+                <Text style={styles.name} numberOfLines={1}>
+                  {nameOf(payer.member_id)}
+                </Text>
+                <Text style={styles.value}>{formatRupees(payer.amount)}</Text>
+              </View>
+            ))}
+          </Card>
+        )}
 
         {/* --- Who it was for, and each person's share --- */}
         <View style={styles.sectionHeader}>

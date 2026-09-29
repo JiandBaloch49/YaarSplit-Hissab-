@@ -129,10 +129,12 @@ export function groupByDay(items) {
  *   ['Hammal'], 4 people        → "Hammal paid, for 4"
  *   ['Naveed'], ['Zarak'] only  → "Naveed paid, for Zarak"
  *   ['A', 'B'], 3 people        → "A & B paid, for 3"
+ *   fromFund = true             → "Paid from fund, for 4"
  */
-export function describeExpense(payerNames, participantNames) {
+export function describeExpense(payerNames, participantNames, fromFund = false) {
   const forWhom = participantNames.length === 1 ? participantNames[0] : participantNames.length;
-  return `${joinNames(payerNames)} paid, for ${forWhom}`;
+  const paid = fromFund ? 'Paid from fund' : `${joinNames(payerNames)} paid`;
+  return `${paid}, for ${forWhom}`;
 }
 
 /**

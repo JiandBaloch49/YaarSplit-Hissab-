@@ -1,5 +1,6 @@
-// ActionMenu.js — a list of choices that slides up from the bottom, used for
-// the "..." menu on the group screen ("Rename group", "Delete group").
+// ActionMenu.js — a list of choices that slides up from the bottom. Used for
+// the "..." menu on the group screen ("Rename group", "Delete group") and for
+// picking who holds the group fund.
 //
 // It's drawn as an overlay on top of the screen rather than a native Modal:
 // on iOS, opening a pop-up (like the rename box) while a Modal is still
@@ -8,16 +9,30 @@
 //
 // Props:
 //   visible   show or hide it
-//   options   [{ label, onPress, destructive }]  destructive = shown in orange
+//   title     optional question shown above the choices
+//   options   [{ label, onPress, destructive, key }]
+//             destructive = shown in orange; key = optional unique id
+//             (needed when two labels could be the same, e.g. names)
 //   onClose   called when the menu should close (Cancel, tap outside, back)
+//
+// A long list (e.g. many members) scrolls instead of running off the screen.
 
 import { useEffect } from 'react';
-import { BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  BackHandler,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts, radius } from '../theme';
 
-export default function ActionMenu({ visible, options, onClose }) {
+export default function ActionMenu({ visible, title, options, onClose }) {
   const insets = useSafeAreaInsets();
+  const { height: screenHeight } = useWindowDimensions();
 
   // Android's back button closes the menu instead of leaving the screen.
   useEffect(() => {
@@ -41,26 +56,30 @@ export default function ActionMenu({ visible, options, onClose }) {
         accessibilityLabel="Close menu"
       />
       <View style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]}>
-        <View style={styles.options}>
-          {options.map((option, index) => (
-            <Pressable
-              key={option.label}
-              onPress={() => {
-                onClose();
-                option.onPress();
-              }}
-              accessibilityRole="button"
-              style={({ pressed }) => [
-                styles.option,
-                index > 0 && styles.divider,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text style={[styles.optionText, option.destructive && styles.destructive]}>
-                {option.label}
-              </Text>
-            </Pressable>
-          ))}
+        {/* At most 60% of the screen tall; longer lists scroll inside. */}
+        <View style={[styles.options, { maxHeight: screenHeight * 0.6 }]}>
+          {title && <Text style={styles.title}>{title}</Text>}
+          <ScrollView bounces={false}>
+            {options.map((option, index) => (
+              <Pressable
+                key={option.key ?? option.label}
+                onPress={() => {
+                  onClose();
+                  option.onPress();
+                }}
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.option,
+                  index > 0 && styles.divider,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={[styles.optionText, option.destructive && styles.destructive]}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
         </View>
         <Pressable
           onPress={onClose}
@@ -91,6 +110,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radius.card,
     overflow: 'hidden',
+  },
+  title: {
+    fontFamily: fonts.medium,
+    fontSize: 15,
+    color: colors.muted,
+    textAlign: 'center',
+    paddingTop: 16,
+    paddingBottom: 8,
+    paddingHorizontal: 16,
   },
   option: {
     minHeight: 58,

@@ -9,6 +9,8 @@
 //                   (deleteMember / deleteGroup refuse if not settled up)
 //   restoreX(id)    undo a soft delete (expenses, payments — for "Undo")
 //
+// Group fund: see "Group fund" below and fundSummary() in split.js.
+//
 // Every change sets updated_at to now and synced back to 0.
 //
 // Expenses store payers/participants as JSON text in SQLite. This file is the
@@ -17,7 +19,13 @@
 
 import * as Crypto from 'expo-crypto';
 import { getDb } from './database';
-import { prepareExpense, computeBalances, summarizeGroup } from '../logic/split';
+import {
+  PAYMENT_TYPES,
+  computeBalances,
+  fundSummary,
+  prepareExpense,
+  summarizeGroup,
+} from '../logic/split';
 import { formatRupees } from '../logic/format';
 
 // ---------------------------------------------------------------------------
@@ -190,6 +198,15 @@ export function deleteMember(id) {
     return { ok: false, errors: ['That member no longer exists.'] };
   }
 
+  // The fund holder has the group's cash, so they can't just disappear.
+  const group = getGroup(member.group_id);
+  if (group && group.fund_holder_id === id) {
+    return {
+      ok: false,
+      errors: [`${member.name} holds the group fund. Change the fund holder first.`],
+    };
+  }
+
   // Work out this member's balance from everything in their group.
   // + means they are owed money, - means they owe money (see split.js).
   const balances = computeBalances(
@@ -224,22 +241,51 @@ function expenseFromRow(row) {
   };
 }
 
+// Fund expenses are ALWAYS paid by the fund holder, for the full amount —
+// whatever the screen sent. (If the fund doesn't have enough, the holder
+// covers the rest; fundSummary() in split.js works out that split.)
+//
+// Returns { ok: true, input } with payers filled in, or { ok: false, errors }.
+function applyFundPayer(groupId, input) {
+  if (!input.from_fund) return { ok: true, input: { ...input, from_fund: 0 } };
+
+  const group = getGroup(groupId);
+  if (!group || !group.fund_holder_id) {
+    return {
+      ok: false,
+      errors: ['This group has no fund. Turn off “Paid from group fund” or start a fund first.'],
+    };
+  }
+  return {
+    ok: true,
+    input: {
+      ...input,
+      from_fund: 1,
+      payers: [{ member_id: group.fund_holder_id, amount: input.amount }],
+    },
+  };
+}
+
 /**
  * Save a new expense.
  *
  * `input` is what the Add Expense screen collects (see prepareExpense in
  * src/logic/split.js): { description, amount, category, split_type, payers,
- * participants }.
+ * participants, from_fund }.
  *
  * It ALWAYS goes through prepareExpense() first. That checks everything
  * (totals add up, whole rupees, ...) and works out each person's share.
+ * With from_fund, the payer is set to the fund holder first.
  *
  * Returns ONE of:
  *   { ok: true,  expense }  — saved; `expense` is the new row (arrays, not JSON)
  *   { ok: false, errors }   — nothing was saved; show these messages
  */
-export function addExpense(groupId, input) {
-  const result = prepareExpense(input);
+export function addExpense(groupId, rawInput) {
+  const fund = applyFundPayer(groupId, rawInput);
+  if (!fund.ok) return fund;
+
+  const result = prepareExpense(fund.input);
   if (!result.ok) {
     return { ok: false, errors: result.errors };
   }
@@ -257,6 +303,7 @@ export function addExpense(groupId, input) {
     split_type: prepared.split_type,
     payers: prepared.payers,
     participants: prepared.participants,
+    from_fund: prepared.from_fund,
     created_at: time,
     updated_at: time,
     deleted: 0,
@@ -266,8 +313,8 @@ export function addExpense(groupId, input) {
   getDb().runSync(
     `INSERT INTO expenses
        (id, group_id, description, amount, category, split_type,
-        payers, participants, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        payers, participants, from_fund, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       expense.id,
       expense.group_id,
@@ -277,6 +324,7 @@ export function addExpense(groupId, input) {
       expense.split_type,
       JSON.stringify(expense.payers), // array → JSON text for SQLite
       JSON.stringify(expense.participants), // array → JSON text for SQLite
+      expense.from_fund,
       expense.created_at,
       expense.updated_at,
     ]
@@ -314,8 +362,15 @@ export function getExpense(id) {
  *   { ok: true,  expense }  — saved; the updated expense (arrays, not JSON)
  *   { ok: false, errors }   — nothing was saved; show these messages
  */
-export function updateExpense(id, input) {
-  const result = prepareExpense(input);
+export function updateExpense(id, rawInput) {
+  const existing = getExpense(id);
+  if (!existing) {
+    return { ok: false, errors: ['This expense was deleted, so it can’t be edited.'] };
+  }
+  const fund = applyFundPayer(existing.group_id, rawInput);
+  if (!fund.ok) return fund;
+
+  const result = prepareExpense(fund.input);
   if (!result.ok) {
     return { ok: false, errors: result.errors };
   }
@@ -325,7 +380,7 @@ export function updateExpense(id, input) {
   const { changes } = getDb().runSync(
     `UPDATE expenses
         SET description = ?, amount = ?, category = ?, split_type = ?,
-            payers = ?, participants = ?,
+            payers = ?, participants = ?, from_fund = ?,
             updated_at = ?, synced = 0
       WHERE id = ? AND deleted = 0`,
     [
@@ -335,6 +390,7 @@ export function updateExpense(id, input) {
       prepared.split_type,
       JSON.stringify(prepared.payers), // array → JSON text for SQLite
       JSON.stringify(prepared.participants),
+      prepared.from_fund,
       time,
       id,
     ]
@@ -370,24 +426,50 @@ function paymentFromRow(row) {
 }
 
 /**
- * Record that `fromId` paid `toId` back `amount` rupees.
+ * Record that `fromId` gave `toId` `amount` rupees.
+ *
+ * `type` (see PAYMENT_TYPES in split.js):
+ *   'settlement'   (default) paying someone back
+ *   'contribution' putting money into the group fund — toId must be the
+ *                  fund holder. The holder may put in their own money, so
+ *                  fromId === toId is allowed here.
+ *   'return'       the holder handing leftover fund money back — fromId
+ *                  must be the holder. toId === holder means "the holder
+ *                  keeps it" (their own share).
  *
  * Returns ONE of:
  *   { ok: true,  payment }  — saved
  *   { ok: false, errors }   — nothing was saved; show these messages
  */
-export function addPayment(groupId, { fromId, toId, amount }) {
+export function addPayment(groupId, { fromId, toId, amount, type = 'settlement' }) {
   // Basic checks, so a bad value becomes a readable message instead of a
   // crash from the table's CHECK (amount > 0).
   const errors = [];
   if (!Number.isInteger(amount) || amount <= 0) {
     errors.push('Amount must be a whole number of rupees, more than 0.');
   }
-  if (!fromId || !toId) {
-    errors.push('Pick who paid and who received the money.');
-  } else if (fromId === toId) {
-    errors.push('Someone can’t pay themselves.');
+  if (!PAYMENT_TYPES.includes(type)) {
+    errors.push(`Payment type must be one of: ${PAYMENT_TYPES.join(', ')}.`);
   }
+
+  if (!fromId || !toId) {
+    errors.push(
+      type === 'contribution' ? 'Pick who is giving the money.' : 'Pick who paid and who received the money.'
+    );
+  } else if (type === 'settlement' && fromId === toId) {
+    errors.push('Someone can’t pay themselves.');
+  } else if (type !== 'settlement') {
+    // Fund money must go to / come from whoever holds the fund.
+    const holderId = getGroup(groupId)?.fund_holder_id;
+    if (!holderId) {
+      errors.push('This group has no fund.');
+    } else if (type === 'contribution' && toId !== holderId) {
+      errors.push('Money for the fund must go to the fund holder.');
+    } else if (type === 'return' && fromId !== holderId) {
+      errors.push('Only the fund holder can hand back fund money.');
+    }
+  }
+
   if (errors.length > 0) {
     return { ok: false, errors };
   }
@@ -399,6 +481,7 @@ export function addPayment(groupId, { fromId, toId, amount }) {
     fromId,
     toId,
     amount,
+    type,
     created_at: time,
     updated_at: time,
     deleted: 0,
@@ -406,9 +489,9 @@ export function addPayment(groupId, { fromId, toId, amount }) {
   };
   getDb().runSync(
     `INSERT INTO payments
-       (id, group_id, from_member_id, to_member_id, amount, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [payment.id, groupId, fromId, toId, amount, time, time]
+       (id, group_id, from_member_id, to_member_id, amount, type, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [payment.id, groupId, fromId, toId, amount, type, time, time]
   );
   return { ok: true, payment };
 }
@@ -429,4 +512,41 @@ export function deletePayment(id) {
 // Undo deletePayment (the "Undo" button after deleting).
 export function restorePayment(id) {
   restore('payments', id);
+}
+
+// ---------------------------------------------------------------------------
+// Group fund
+// ---------------------------------------------------------------------------
+
+// The fund's numbers for a group (see fundSummary in split.js), or null if
+// the group has no fund.
+export function getFund(groupId) {
+  const group = getGroup(groupId);
+  if (!group || !group.fund_holder_id) return null;
+  return fundSummary(group, listExpenses(groupId), listPayments(groupId));
+}
+
+/**
+ * Start a fund, change who holds it, or end it (holderId = null).
+ *
+ * Changing the holder is only allowed while the fund is at Rs 0 — otherwise
+ * the cash is in one person's pocket but the app would say it's in another's.
+ *
+ * Returns { ok: true } or { ok: false, errors }.
+ */
+export function setFundHolder(groupId, holderId) {
+  const fund = getFund(groupId);
+  if (fund && fund.left !== 0) {
+    return {
+      ok: false,
+      errors: [
+        `The fund still has ${formatRupees(fund.left)}. Return the leftover first, then change the holder.`,
+      ],
+    };
+  }
+  getDb().runSync(
+    'UPDATE groups SET fund_holder_id = ?, updated_at = ?, synced = 0 WHERE id = ? AND deleted = 0',
+    [holderId, now(), groupId]
+  );
+  return { ok: true };
 }

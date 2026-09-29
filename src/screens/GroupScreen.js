@@ -8,6 +8,10 @@
 // the standard one, to match the design. The tabs are a segmented control
 // underneath.
 //
+// The group fund card sits at the top of the Expenses tab: "Hammal is
+// holding Rs 1,000" with "Add money" / "View history", or a small "Start a
+// group fund" link when there's no fund yet.
+//
 // Route params (set by GroupsScreen):
 //   groupId     which group to show
 //   name        the group's name, shown until the group is loaded
@@ -22,6 +26,7 @@ import ExpensesTab from '../components/ExpensesTab';
 import BalancesTab from '../components/BalancesTab';
 import MembersTab from '../components/MembersTab';
 import ActionMenu from '../components/ActionMenu';
+import FundCard from '../components/FundCard';
 import TextPromptModal from '../components/TextPromptModal';
 import { useAfterUndo, useUndo } from '../components/UndoBar';
 import { ChevronLeft, Ellipsis } from '../components/icons';
@@ -39,8 +44,9 @@ import {
   renameGroup,
   renameMember,
   restorePayment,
+  setFundHolder,
 } from '../db/queries';
-import { computeBalances, settleUp, summarizeGroup } from '../logic/split';
+import { computeBalances, fundSummary, settleUp, summarizeGroup } from '../logic/split';
 import { describeGroup, formatRupees } from '../logic/format';
 
 const TABS = [
@@ -57,11 +63,13 @@ export default function GroupScreen({ route, navigation }) {
 
   const [tab, setTab] = useState(initialTab || 'expenses');
   const [groupName, setGroupName] = useState(name);
+  const [holderId, setHolderId] = useState(null); // group fund holder, or null
   const [members, setMembers] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [payments, setPayments] = useState([]);
 
   const [menuOpen, setMenuOpen] = useState(false); // the "..." menu
+  const [pickingHolder, setPickingHolder] = useState(false); // "Start a group fund"
   // What the rename pop-up is renaming: { kind: 'group' },
   // { kind: 'member', member }, or null when it's closed.
   const [renaming, setRenaming] = useState(null);
@@ -69,7 +77,10 @@ export default function GroupScreen({ route, navigation }) {
   // Read everything for this group from the database.
   const reload = useCallback(() => {
     const group = getGroup(groupId);
-    if (group) setGroupName(group.name);
+    if (group) {
+      setGroupName(group.name);
+      setHolderId(group.fund_holder_id);
+    }
     setMembers(listMembers(groupId));
     setExpenses(listExpenses(groupId));
     setPayments(listPayments(groupId));
@@ -88,6 +99,8 @@ export default function GroupScreen({ route, navigation }) {
   const balances = computeBalances(members, expenses, payments);
   const transfers = settleUp(balances);
   const { memberCount, totalSpent, toSettle } = summarizeGroup(members, expenses, payments);
+  // The group fund's numbers, or null when there's no fund.
+  const fund = holderId ? fundSummary({ fund_holder_id: holderId }, expenses, payments) : null;
 
   // { [memberId]: name } so the tabs can show names instead of ids.
   const names = {};
@@ -98,6 +111,18 @@ export default function GroupScreen({ route, navigation }) {
   // The same function on every render, so ActionMenu doesn't re-attach its
   // Android back-button listener each time.
   const closeMenu = useCallback(() => setMenuOpen(false), []);
+  const closeHolderPicker = useCallback(() => setPickingHolder(false), []);
+
+  // "Start a group fund" → pick the holder → straight on to adding money.
+  function handleStartFund(memberId) {
+    const result = setFundHolder(groupId, memberId);
+    if (!result.ok) {
+      Alert.alert('Could not start the fund', result.errors.join('\n'));
+      return;
+    }
+    reload();
+    navigation.navigate('AddMoney', { groupId });
+  }
 
   function handleMarkPaid(transfer) {
     const from = names[transfer.fromId] || 'Removed member';
@@ -236,6 +261,16 @@ export default function GroupScreen({ route, navigation }) {
           onOpenExpense={(expense) =>
             navigation.navigate('ExpenseDetails', { groupId, expenseId: expense.id })
           }
+          header={
+            <FundCard
+              fund={fund}
+              holderName={names[holderId] || 'Removed member'}
+              canStart={members.length > 0}
+              onStart={() => setPickingHolder(true)}
+              onAddMoney={() => navigation.navigate('AddMoney', { groupId })}
+              onViewFund={() => navigation.navigate('Fund', { groupId })}
+            />
+          }
         />
       )}
       {tab === 'balances' && (
@@ -243,7 +278,9 @@ export default function GroupScreen({ route, navigation }) {
           members={members}
           balances={balances}
           transfers={transfers}
-          payments={payments}
+          // Only paying-back payments here; money in and out of the group
+          // fund is listed on the fund screen instead.
+          payments={payments.filter((p) => p.type === 'settlement')}
           names={names}
           onMarkPaid={handleMarkPaid}
           onDeletePayment={handleDeletePayment}
@@ -279,6 +316,18 @@ export default function GroupScreen({ route, navigation }) {
           { label: 'Rename group', onPress: () => setRenaming({ kind: 'group' }) },
           { label: 'Delete group', onPress: handleDeleteGroup, destructive: true },
         ]}
+      />
+
+      {/* "Start a group fund": choose who holds the cash. */}
+      <ActionMenu
+        visible={pickingHolder}
+        title="Who will hold the fund’s money?"
+        onClose={closeHolderPicker}
+        options={members.map((member) => ({
+          key: member.id,
+          label: member.name,
+          onPress: () => handleStartFund(member.id),
+        }))}
       />
     </View>
   );

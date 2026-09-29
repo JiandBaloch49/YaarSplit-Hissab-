@@ -8,6 +8,10 @@
 // as chips, and "For whom" as a checklist that shows each person's share
 // live as you type (unticked people show "Didn't join").
 //
+// If the group has a fund, a "Paid from group fund" switch hides "Paid by"
+// and makes the fund holder the payer. If the fund doesn't have enough, a
+// warning says how much the holder pays themselves (it still saves fine).
+//
 // The simple case needs no extra taps: equal split, one payer, everyone
 // ticked. "Custom split or several payers" unlocks:
 //   - Custom split: type each person's exact share
@@ -22,10 +26,11 @@
 //   expenseId  only when editing: which expense to load
 
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AmountInput from '../components/AmountInput';
 import AppButton from '../components/AppButton';
+import BigAmountInput from '../components/BigAmountInput';
 import CheckRow from '../components/CheckRow';
 import Chip from '../components/Chip';
 import ErrorList from '../components/ErrorList';
@@ -34,12 +39,15 @@ import { colors, fonts, money, radius, text } from '../theme';
 import {
   addExpense,
   getExpense,
+  getGroup,
+  listExpenses,
   listMembers,
   listMembersByIds,
+  listPayments,
   updateExpense,
 } from '../db/queries';
-import { CATEGORIES, splitAmount } from '../logic/split';
-import { categoryLabel, formatRupees, formatTypedAmount, parseRupees } from '../logic/format';
+import { CATEGORIES, coverFromFund, fundSummary, splitAmount } from '../logic/split';
+import { categoryLabel, formatRupees, parseRupees } from '../logic/format';
 
 // Add up typed amounts for the "so far" hints, ignoring anything that isn't
 // a whole number yet (e.g. an empty box while the user is still typing).
@@ -61,26 +69,46 @@ function toTextMap(list, field) {
 }
 
 /**
+ * The group fund, as this form needs it: { holderId, left }, or null if the
+ * group has no fund.
+ *
+ * When editing, the expense being edited is left out, so its own old amount
+ * doesn't count against the fund twice. (For an old expense this is a close
+ * estimate — it uses what's left now, not what was left back then.)
+ */
+function loadFundInfo(groupId, expenseId) {
+  const group = getGroup(groupId);
+  if (!group || !group.fund_holder_id) return null;
+  const otherExpenses = listExpenses(groupId).filter((e) => e.id !== expenseId);
+  const { left } = fundSummary(group, otherExpenses, listPayments(groupId));
+  return { holderId: group.fund_holder_id, left };
+}
+
+/**
  * Work out everything the form starts with. Runs once when the screen opens
  * (the sync DB API returns straight away).
  *
- * Returns { members, values, notFound }:
+ * Returns { members, fund, values, notFound }:
  *   members   who can be picked
+ *   fund      see loadFundInfo (null = no fund)
  *   values    the starting value of every field
  *   notFound  true if we were asked to edit an expense that's gone
  */
 function loadForm(groupId, expenseId) {
   const liveMembers = listMembers(groupId);
+  const fund = loadFundInfo(groupId, expenseId);
 
   // --- Adding: empty form, equal split, first member paid, everyone ticked ---
   if (!expenseId) {
     return {
       notFound: false,
       members: liveMembers,
+      fund,
       values: {
         title: '',
         amountText: '',
         category: 'food',
+        fromFund: false,
         paidBy: liveMembers[0]?.id,
         forIds: liveMembers.map((m) => m.id),
         splitType: 'equal',
@@ -94,7 +122,7 @@ function loadForm(groupId, expenseId) {
   // --- Editing: fill the form from the saved expense ---
   const expense = getExpense(expenseId);
   if (!expense) {
-    return { notFound: true, members: liveMembers, values: null };
+    return { notFound: true, members: liveMembers, fund, values: null };
   }
 
   // An old expense may mention someone who has since been removed from the
@@ -116,10 +144,12 @@ function loadForm(groupId, expenseId) {
   return {
     notFound: false,
     members,
+    fund,
     values: {
       title: expense.description,
       amountText: String(expense.amount),
       category: expense.category,
+      fromFund: Boolean(expense.from_fund),
       // With one payer, they're the "Paid by" chip. With several, the chip
       // isn't used, so just default it to the first member.
       paidBy: severalPayers ? members[0]?.id : expense.payers[0].member_id,
@@ -142,13 +172,14 @@ export default function AddExpenseScreen({ route, navigation }) {
   // Read once when the screen opens. Members can't change while this form is
   // open, and reloading on focus would wipe what the user has picked.
   const [form] = useState(() => loadForm(groupId, expenseId));
-  const { members } = form;
+  const { members, fund } = form;
   const start = form.values || {}; // empty only when the expense is gone
 
   // --- Basic fields ---
   const [title, setTitle] = useState(start.title);
   const [amountText, setAmountText] = useState(start.amountText);
   const [category, setCategory] = useState(start.category);
+  const [fromFund, setFromFund] = useState(start.fromFund); // "Paid from group fund"
   const [paidBy, setPaidBy] = useState(start.paidBy); // single payer
   const [forIds, setForIds] = useState(start.forIds); // who it was for
 
@@ -180,6 +211,19 @@ export default function AddExpenseScreen({ route, navigation }) {
   const equalShares =
     amountOk && tickedIds.length > 0 ? splitAmount(amount, tickedIds) : {};
 
+  // --- Group fund ---
+  const holderName = fund ? members.find((m) => m.id === fund.holderId)?.name : null;
+  // Warn when the fund can't cover the whole amount. It still saves: the
+  // holder pays the rest, and balances come out right either way.
+  let fundWarning = null;
+  if (fromFund && fund && amountOk && amount > fund.left) {
+    const { extra } = coverFromFund(fund.left, amount);
+    fundWarning =
+      fund.left > 0
+        ? `The fund has only ${formatRupees(fund.left)} left. ${holderName} pays the other ${formatRupees(extra)} out of pocket.`
+        : `The fund is empty. ${holderName} pays the whole ${formatRupees(amount)} out of pocket.`;
+  }
+
   // The small text next to "For whom":
   //   equal, even split    → "Rs 400 each"
   //   equal, uneven split  → "Rs 333–Rs 334 each" (some get one extra rupee)
@@ -206,7 +250,10 @@ export default function AddExpenseScreen({ route, navigation }) {
     // Payers: either the one "Paid by" person paying the whole total, or
     // everyone who has an amount typed in (blank box = didn't pay).
     let payers;
-    if (severalPayers) {
+    if (fromFund) {
+      // The fund holder pays. (queries.js enforces this too.)
+      payers = fund ? [{ member_id: fund.holderId, amount }] : [];
+    } else if (severalPayers) {
       payers = members
         .filter((m) => (payerAmounts[m.id] || '').trim() !== '')
         .map((m) => ({ member_id: m.id, amount: parseRupees(payerAmounts[m.id]) }));
@@ -236,6 +283,7 @@ export default function AddExpenseScreen({ route, navigation }) {
       split_type: splitType,
       payers,
       participants,
+      from_fund: fromFund ? 1 : 0,
     };
   }
 
@@ -276,23 +324,11 @@ export default function AddExpenseScreen({ route, navigation }) {
       automaticallyAdjustKeyboardInsets // iOS: keep inputs above the keyboard
     >
       {/* --- The big amount --- */}
-      <Text style={styles.amountLabel}>Amount</Text>
-      <View style={styles.amountRow}>
-        <Text style={styles.amountRs}>Rs</Text>
-        <TextInput
-          style={styles.amountInput}
-          // Shown with commas ("1,200"), stored without them ("1200").
-          value={formatTypedAmount(amountText)}
-          onChangeText={(typed) => setAmountText(typed.replace(/,/g, ''))}
-          placeholder="0"
-          placeholderTextColor={colors.line}
-          keyboardType="number-pad"
-          inputMode="numeric"
-          maxLength={11} // 9 digits + 2 commas
-          autoFocus={!editing} // a new expense starts with the amount
-          accessibilityLabel="Amount in rupees"
-        />
-      </View>
+      <BigAmountInput
+        value={amountText}
+        onChange={setAmountText}
+        autoFocus={!editing} // a new expense starts with the amount
+      />
 
       <Text style={styles.label}>What was it for?</Text>
       <TextInput
@@ -315,9 +351,35 @@ export default function AddExpenseScreen({ route, navigation }) {
         ))}
       </View>
 
-      {/* --- Paid by: one person (blue chips), or several people with amounts --- */}
-      <Text style={styles.label}>Paid by</Text>
-      {severalPayers ? (
+      {/* --- Paid from group fund (only when the group has a fund) --- */}
+      {(fund || fromFund) && (
+        <View style={styles.fundRow}>
+          <View style={styles.fundText}>
+            <Text style={styles.fundTitle}>Paid from group fund</Text>
+            <Text style={styles.hint}>
+              {fund
+                ? `${holderName} holds ${formatRupees(fund.left)}`
+                : 'This group no longer has a fund. Turn this off.'}
+            </Text>
+          </View>
+          <Switch
+            value={fromFund}
+            onValueChange={setFromFund}
+            trackColor={{ true: colors.gets, false: colors.line }}
+            accessibilityLabel="Paid from group fund"
+          />
+        </View>
+      )}
+      {fundWarning && (
+        <View style={styles.warning} accessibilityRole="alert">
+          <Text style={styles.warningText}>{fundWarning}</Text>
+        </View>
+      )}
+
+      {/* --- Paid by: one person (blue chips), or several people with amounts.
+          Hidden for fund expenses — the fund holder pays. --- */}
+      {!fromFund && <Text style={styles.label}>Paid by</Text>}
+      {fromFund ? null : severalPayers ? (
         <View>
           {members.map((m, index) => (
             <View key={m.id} style={[styles.listRow, index > 0 && styles.listDivider]}>
@@ -405,11 +467,16 @@ export default function AddExpenseScreen({ route, navigation }) {
             <Chip label="Custom amounts" selected={splitType === 'custom'} onPress={() => setSplitType('custom')} />
           </View>
 
-          <Text style={styles.label}>Who paid</Text>
-          <View style={styles.chips}>
-            <Chip label="One person" selected={!severalPayers} onPress={() => setSeveralPayers(false)} />
-            <Chip label="Several people" selected={severalPayers} onPress={() => setSeveralPayers(true)} />
-          </View>
+          {/* Fund expenses always have one payer: the fund holder. */}
+          {!fromFund && (
+            <>
+              <Text style={styles.label}>Who paid</Text>
+              <View style={styles.chips}>
+                <Chip label="One person" selected={!severalPayers} onPress={() => setSeveralPayers(false)} />
+                <Chip label="Several people" selected={severalPayers} onPress={() => setSeveralPayers(true)} />
+              </View>
+            </>
+          )}
         </View>
       )}
 
@@ -440,33 +507,6 @@ const styles = StyleSheet.create({
   muted: {
     ...text.small,
     fontSize: 16,
-  },
-
-  // Big amount
-  amountLabel: {
-    ...text.small,
-    fontSize: 16,
-    textAlign: 'center',
-  },
-  amountRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: 2,
-  },
-  amountRs: {
-    fontFamily: fonts.display,
-    fontSize: 26,
-    color: colors.muted,
-  },
-  amountInput: {
-    fontFamily: fonts.display,
-    fontSize: 60,
-    color: colors.ink,
-    minWidth: 60,
-    padding: 0, // Android adds padding to inputs by default
-    ...money,
   },
 
   // Labels and inputs
@@ -533,6 +573,36 @@ const styles = StyleSheet.create({
     fontSize: 17,
     color: colors.ink,
     ...money,
+  },
+
+  // Group fund switch and warning
+  fundRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 22,
+    padding: 14,
+    borderRadius: radius.input,
+    backgroundColor: colors.fog,
+  },
+  fundText: {
+    flex: 1,
+    gap: 2,
+  },
+  fundTitle: {
+    ...text.label,
+  },
+  warning: {
+    marginTop: 10,
+    padding: 14,
+    borderRadius: radius.input,
+    backgroundColor: colors.owesSoft,
+  },
+  warningText: {
+    fontFamily: fonts.medium,
+    fontSize: 15,
+    lineHeight: 21,
+    color: colors.owes,
   },
 
   // Custom split or several payers

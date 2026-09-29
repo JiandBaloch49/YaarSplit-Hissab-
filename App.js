@@ -13,6 +13,8 @@
 //   Groups  →  Group (Expenses / Balances / Members tabs)
 //             →  AddExpense                       (the "Add expense" button)
 //             →  ExpenseDetails  →  AddExpense    (tap a row, then "Edit")
+//             →  AddMoney                         (group fund: "Add money")
+//             →  Fund  →  AddMoney                (group fund: "View history")
 //
 // <UndoProvider> draws the "Expense deleted. Undo" bar on top of every
 // screen (see src/components/UndoBar.js).
@@ -36,6 +38,8 @@ import GroupsScreen from './src/screens/GroupsScreen';
 import GroupScreen from './src/screens/GroupScreen';
 import AddExpenseScreen from './src/screens/AddExpenseScreen';
 import ExpenseDetailsScreen from './src/screens/ExpenseDetailsScreen';
+import FundScreen from './src/screens/FundScreen';
+import AddMoneyScreen from './src/screens/AddMoneyScreen';
 import { UndoProvider } from './src/components/UndoBar';
 import { X } from './src/components/icons';
 import { colors, fonts } from './src/theme';
@@ -47,6 +51,27 @@ initDatabase();
 SplashScreen.preventAutoHideAsync();
 
 const Stack = createNativeStackNavigator();
+
+// Header for form screens ("Add expense", "Add money"): a centred title,
+// an ✕ to close, on a white background.
+function formOptions(navigation, title) {
+  return {
+    title,
+    headerTitleAlign: 'center',
+    headerStyle: { backgroundColor: colors.surface },
+    contentStyle: { backgroundColor: colors.surface },
+    headerLeft: () => (
+      <Pressable
+        onPress={() => navigation.goBack()}
+        accessibilityRole="button"
+        accessibilityLabel="Close"
+        hitSlop={12}
+      >
+        <X size={24} color={colors.ink} strokeWidth={2.25} />
+      </Pressable>
+    ),
+  };
+}
 
 export default function App() {
   // The names used here are the fontFamily names in src/theme.js.
@@ -95,23 +120,19 @@ export default function App() {
               name="AddExpense"
               component={AddExpenseScreen}
               // Same screen for both: an expenseId in the params means editing.
-              // A centred title with an ✕ to close, on a white background.
-              options={({ route, navigation }) => ({
-                title: route.params.expenseId ? 'Edit expense' : 'Add expense',
-                headerTitleAlign: 'center',
-                headerStyle: { backgroundColor: colors.surface },
-                contentStyle: { backgroundColor: colors.surface },
-                headerLeft: () => (
-                  <Pressable
-                    onPress={() => navigation.goBack()}
-                    accessibilityRole="button"
-                    accessibilityLabel="Close"
-                    hitSlop={12}
-                  >
-                    <X size={24} color={colors.ink} strokeWidth={2.25} />
-                  </Pressable>
-                ),
-              })}
+              options={({ route, navigation }) =>
+                formOptions(navigation, route.params.expenseId ? 'Edit expense' : 'Add expense')
+              }
+            />
+            <Stack.Screen
+              name="Fund"
+              component={FundScreen}
+              options={{ title: 'Group fund', headerStyle: { backgroundColor: colors.fog } }}
+            />
+            <Stack.Screen
+              name="AddMoney"
+              component={AddMoneyScreen}
+              options={({ navigation }) => formOptions(navigation, 'Add money')}
             />
           </Stack.Navigator>
           <StatusBar style="dark" />

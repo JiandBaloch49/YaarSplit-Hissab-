@@ -8,7 +8,7 @@
 // directly — they call the functions in queries.js instead.
 
 import * as SQLite from 'expo-sqlite';
-import { ALL_TABLES } from './schema';
+import { ADDED_COLUMNS, ALL_TABLES } from './schema';
 
 // The file name of the database on the phone.
 const DATABASE_NAME = 'hisaab.db';
@@ -25,7 +25,8 @@ export function getDb() {
 }
 
 // Run once when the app starts (see App.js). Safe to call again: every table
-// is created with "IF NOT EXISTS", so existing data is never touched.
+// is created with "IF NOT EXISTS", and columns are only added if missing,
+// so existing data is never touched.
 export function initDatabase() {
   const database = getDb();
 
@@ -39,5 +40,24 @@ export function initDatabase() {
     for (const createTableSql of ALL_TABLES) {
       database.execSync(createTableSql);
     }
+
+    // Bring tables made by an older version of the app up to date.
+    for (const [table, column, definition] of ADDED_COLUMNS) {
+      addColumnIfMissing(database, table, column, definition);
+    }
   });
+}
+
+// Add one column to a table, unless it's already there.
+//
+// PRAGMA table_info lists a table's columns ({ name, type, ... } per
+// column). A brand-new install already has every column (they're in the
+// CREATE TABLE statements), so this does nothing there; an older install
+// gets the column added, and existing rows get its DEFAULT value.
+// table/column/definition come from schema.js, never from user input, so
+// putting them into the SQL text is safe.
+function addColumnIfMissing(database, table, column, definition) {
+  const columns = database.getAllSync(`PRAGMA table_info(${table})`);
+  if (columns.some((c) => c.name === column)) return;
+  database.execSync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }

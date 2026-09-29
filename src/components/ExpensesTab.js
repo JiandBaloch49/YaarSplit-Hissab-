@@ -2,7 +2,9 @@
 //
 // Expenses are grouped by day ("Sunday, 28 Sep"), newest first. Each day is
 // one white card; each row shows the category icon, the title, "Hammal
-// paid, for 4", the amount, and an arrow. Tapping a row opens its details.
+// paid, for 4" (or "Paid from fund, for 4"), the amount, and an arrow.
+// Tapping a row opens its details. Anything passed as `header` (the group
+// fund card) is shown above the list.
 // A floating "Add expense" button sits in the bottom-right corner; while the
 // undo bar is showing, it moves up above the bar so it's never covered.
 //
@@ -14,6 +16,7 @@
 //   canAdd         false when the group has no members yet
 //   onAddExpense   called when "Add expense" is tapped
 //   onOpenExpense  called with the expense when its row is tapped (opens details)
+//   header         optional element shown above the expenses (FundCard)
 
 import { Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -24,7 +27,14 @@ import { ChevronRight, Plus } from './icons';
 import { categoryLabel, describeExpense, formatRupees, groupByDay } from '../logic/format';
 import { colors, fonts, money, radius, text } from '../theme';
 
-export default function ExpensesTab({ expenses, names, canAdd, onAddExpense, onOpenExpense }) {
+export default function ExpensesTab({
+  expenses,
+  names,
+  canAdd,
+  onAddExpense,
+  onOpenExpense,
+  header,
+}) {
   const insets = useSafeAreaInsets(); // space taken by the phone's home bar
   const { isShowing: undoShowing } = useUndo();
   // Normally 16 above the home bar; lifted above the undo bar while it shows.
@@ -38,6 +48,7 @@ export default function ExpensesTab({ expenses, names, canAdd, onAddExpense, onO
         // Room at the bottom so the floating button never hides the last row.
         contentContainerStyle={[styles.list, { paddingBottom: buttonBottom + 80 }]}
         stickySectionHeadersEnabled={false}
+        ListHeaderComponent={header}
         renderSectionHeader={({ section }) => <Text style={styles.day}>{section.title}</Text>}
         renderItem={({ item, index, section }) => (
           <ExpenseRow
@@ -73,7 +84,8 @@ function ExpenseRow({ expense, names, isFirst, isLast, onPress }) {
   const nameOf = (id) => names[id] || 'Removed member';
   const summary = describeExpense(
     expense.payers.map((p) => nameOf(p.member_id)),
-    expense.participants.map((p) => nameOf(p.member_id))
+    expense.participants.map((p) => nameOf(p.member_id)),
+    Boolean(expense.from_fund)
   );
   const title = expense.description || categoryLabel(expense.category);
 

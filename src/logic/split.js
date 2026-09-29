@@ -15,10 +15,19 @@
 //     split_type,                              // 'equal' or 'custom'
 //     payers:       [{ member_id, amount }],   // who paid, and how much
 //     participants: [{ member_id, share }],    // who it was FOR, and their share
+//     from_fund,                               // 1 = paid from the group fund
 //   }
-//   payment = { fromId, toId, amount }         // fromId paid toId back
+//   payment = { fromId, toId, amount, type }   // fromId gave toId money
 //   balances = { [memberId]: rupees }  // + means they are owed money,
 //                                      // - means they owe money
+//
+// Group fund: friends give cash to one member (the fund holder), who pays
+// expenses from it. This needs NO special balance maths:
+//   - putting money in  = a payment from the giver to the holder
+//   - a fund expense    = an expense paid by the holder
+//   - returning leftover = a payment from the holder back to a member
+// computeBalances treats all of these as ordinary payments/expenses. Only
+// fundSummary() looks at the payment `type`, to track the cash in the fund.
 //
 // Note: payers and participants don't have to overlap. "A paid the mechanic
 // for D's bike" is payers [A], participants [D].
@@ -33,6 +42,12 @@ export const CATEGORIES = ['food', 'tea', 'transport', 'repair', 'shopping', 'ot
 //   equal  — the total is divided evenly with splitAmount()
 //   custom — the user types an exact share for each person
 export const SPLIT_TYPES = ['equal', 'custom'];
+
+// Allowed values for payment.type.
+//   settlement   — paying someone back (the normal "Mark as paid")
+//   contribution — putting money into the group fund (giver → holder)
+//   return       — the holder giving leftover fund money back (holder → member)
+export const PAYMENT_TYPES = ['settlement', 'contribution', 'return'];
 
 // Helper: is this a whole number of rupees, 0 or more?
 function isRupees(value) {
@@ -344,4 +359,147 @@ export function summarizeGroup(members, expenses, payments) {
   }
 
   return { memberCount: members.length, totalSpent, toSettle };
+}
+
+/**
+ * How much of an expense the fund can cover, and how much the holder has to
+ * pay from their own pocket.
+ *
+ *   coverFromFund(1000, 1500) → { fromFund: 1000, extra: 500 }
+ *   coverFromFund(1000, 300)  → { fromFund: 300,  extra: 0 }
+ *   coverFromFund(0, 700)     → { fromFund: 0,    extra: 700 }
+ */
+export function coverFromFund(left, amount) {
+  const fromFund = Math.min(amount, Math.max(left, 0));
+  return { fromFund, extra: amount - fromFund };
+}
+
+/**
+ * Everything about the group fund, worked out from the money going in and
+ * out, in the order it happened (by created_at).
+ *
+ *   group     { fund_holder_id }   (null/undefined = no fund)
+ *   expenses  live expenses; the ones with from_fund = 1 spend from the fund
+ *   payments  live payments; 'contribution' adds to the fund, 'return' takes
+ *             leftover back out. 'settlement' payments are ignored here.
+ *
+ * Returns:
+ *   {
+ *     holderId,        who holds the cash now
+ *     totalIn,         all money put in
+ *     totalSpent,      money spent FROM THE FUND (never more than was in it)
+ *     totalReturned,   leftover given back
+ *     holderExtra,     what holders paid from their own pocket when a fund
+ *                      expense was bigger than what was left
+ *     left,            cash still in the fund, with the holder
+ *     contributions,   { [memberId]: rupees put in }
+ *     history,         one entry per event, oldest first:
+ *                      { kind: 'in' | 'out' | 'return', id, created_at,
+ *                        memberId, amount, fromFund, extra, left, expense }
+ *                      `left` is the running amount after that event.
+ *   }
+ *
+ * Why an expense can be bigger than the fund: if the fund runs out, the
+ * holder pays the rest themselves. The expense is still saved as paid by the
+ * holder for the full amount, so balances stay right — this function just
+ * splits it into "from the fund" and "extra".
+ */
+export function fundSummary(group, expenses, payments) {
+  // Collect every fund event, then put them in time order.
+  const events = [];
+  for (const payment of payments) {
+    if (payment.type === 'contribution' || payment.type === 'return') {
+      events.push({ kind: payment.type === 'contribution' ? 'in' : 'return', item: payment });
+    }
+  }
+  for (const expense of expenses) {
+    if (expense.from_fund) events.push({ kind: 'out', item: expense });
+  }
+  // Array sort is stable, so events with the same time keep their order.
+  events.sort((a, b) => a.item.created_at - b.item.created_at);
+
+  let left = 0;
+  let totalIn = 0;
+  let totalSpent = 0;
+  let totalReturned = 0;
+  let holderExtra = 0;
+  const contributions = {};
+  const history = [];
+
+  for (const { kind, item } of events) {
+    const entry = { kind, id: item.id, created_at: item.created_at, amount: item.amount };
+
+    if (kind === 'in') {
+      // Money in: from the giver, to the holder.
+      left += item.amount;
+      totalIn += item.amount;
+      contributions[item.fromId] = (contributions[item.fromId] || 0) + item.amount;
+      entry.memberId = item.fromId;
+    } else if (kind === 'return') {
+      // Leftover out: from the holder, back to a member.
+      left -= item.amount;
+      totalReturned += item.amount;
+      entry.memberId = item.toId;
+    } else {
+      // A fund expense: the fund pays what it can, the holder the rest.
+      const { fromFund, extra } = coverFromFund(left, item.amount);
+      left -= fromFund;
+      totalSpent += fromFund;
+      holderExtra += extra;
+      entry.memberId = item.payers[0]?.member_id; // the holder who paid
+      entry.fromFund = fromFund;
+      entry.extra = extra;
+      entry.expense = item;
+    }
+
+    entry.left = left;
+    history.push(entry);
+  }
+
+  return {
+    holderId: group.fund_holder_id || null,
+    totalIn,
+    totalSpent,
+    totalReturned,
+    holderExtra,
+    left,
+    contributions,
+    history,
+  };
+}
+
+/**
+ * Suggest how the holder should hand back the money left in the fund, based
+ * on balances.
+ *
+ * People who are owed money (positive balance) get paid back first, biggest
+ * first, each up to what they're owed. Whatever is left after that is the
+ * holder's own money, so the holder keeps it (a "return" to themselves).
+ *
+ *   left 1000, holder A, balances { A: -750, B: 250, C: 250, D: 250 }
+ *   → [{ toId: 'B', amount: 250 }, { toId: 'C', amount: 250 },
+ *      { toId: 'D', amount: 250 }, { toId: 'A', amount: 250 }]
+ *
+ * Returns [{ toId, amount }]. Every return comes from the holder.
+ */
+export function suggestReturns(left, holderId, balances) {
+  const returns = [];
+  let remaining = left;
+
+  // Everyone owed money except the holder, biggest first (ties by id, so the
+  // result is always the same).
+  const owed = Object.keys(balances)
+    .filter((id) => id !== holderId && balances[id] > 0)
+    .sort((a, b) => balances[b] - balances[a] || (a < b ? -1 : 1));
+
+  for (const id of owed) {
+    if (remaining <= 0) break;
+    const amount = Math.min(balances[id], remaining);
+    returns.push({ toId: id, amount });
+    remaining -= amount;
+  }
+
+  // The rest belongs to the holder.
+  if (remaining > 0) returns.push({ toId: holderId, amount: remaining });
+  return returns;
 }
