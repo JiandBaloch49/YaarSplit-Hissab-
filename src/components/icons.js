@@ -15,6 +15,7 @@ export { default as ChevronRight } from 'lucide-react-native/icons/chevron-right
 export { default as ChevronUp } from 'lucide-react-native/icons/chevron-up';
 export { default as Coffee } from 'lucide-react-native/icons/coffee';
 export { default as Ellipsis } from 'lucide-react-native/icons/ellipsis';
+export { default as Heart } from 'lucide-react-native/icons/heart';
 export { default as Pencil } from 'lucide-react-native/icons/pencil';
 export { default as Plus } from 'lucide-react-native/icons/plus';
 export { default as ShoppingBag } from 'lucide-react-native/icons/shopping-bag';

@@ -5,6 +5,7 @@
 //        4 friends, Rs 8,500 spent           to settle
 // Tap a group to open it. "New group" (pinned to the bottom) asks for a name.
 // While developing (__DEV__), there's also a "Load test data" button.
+// At the very end of the list: "Built with ♥ by Jiand Baloch".
 
 import { useCallback, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -14,7 +15,7 @@ import AppButton from '../components/AppButton';
 import Card from '../components/Card';
 import { LetterTile } from '../components/IconTile';
 import TextPromptModal from '../components/TextPromptModal';
-import { Check, Plus } from '../components/icons';
+import { Check, Heart, Plus } from '../components/icons';
 import { addGroup, listExpenses, listGroups, listMembers, listPayments } from '../db/queries';
 import { loadTestData } from '../db/testData';
 import { describeGroup, formatRupees } from '../logic/format';
@@ -73,8 +74,10 @@ export default function GroupsScreen({ navigation }) {
       <ScrollView
         contentContainerStyle={[
           styles.content,
-          // Below the status bar at the top; above the pinned button at the bottom.
-          { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 110 },
+          // Below the status bar at the top. At the bottom, room for the
+          // pinned "New group" bar plus a small gap, so the credit line at
+          // the end of the list is never hidden behind it.
+          { paddingTop: insets.top + 40, paddingBottom: insets.bottom + PINNED_BAR_HEIGHT + 12 },
         ]}
       >
         <Text style={styles.title}>Hisaab</Text>
@@ -102,6 +105,8 @@ export default function GroupsScreen({ navigation }) {
             <AppButton title="Load test data" variant="secondary" small onPress={handleLoadTestData} />
           </View>
         )}
+
+        <CreditLine />
       </ScrollView>
 
       {/* Pinned to the bottom of the screen, above the home bar. */}
@@ -117,6 +122,20 @@ export default function GroupsScreen({ navigation }) {
         onSubmit={handleCreate}
         onCancel={() => setAskingName(false)}
       />
+    </View>
+  );
+}
+
+// "Built with ♥ by Jiand Baloch" — the last thing in the scrolling list.
+// With only a few groups (or none) it's pushed down to sit just above "New
+// group" (marginTop: 'auto' in styles.credit); with many, it follows the
+// last group. Screen readers hear one sentence instead of separate pieces.
+function CreditLine() {
+  return (
+    <View style={styles.credit} accessible accessibilityLabel="Built with love by Jiand Baloch">
+      <Text style={styles.creditText}>Built with </Text>
+      <Heart size={13} color={colors.owes} fill={colors.owes} strokeWidth={2} />
+      <Text style={styles.creditText}> by Jiand Baloch</Text>
     </View>
   );
 }
@@ -166,12 +185,17 @@ function GroupRow({ group, index, onPress }) {
   );
 }
 
+// Height of the pinned "New group" bar, not counting the home-bar inset:
+// 12 padding above + 56 button + 16 padding below (see styles.bottomBar).
+const PINNED_BAR_HEIGHT = 12 + 56 + 16;
+
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.fog,
   },
   content: {
+    flexGrow: 1, // fill the screen, so the credit line can sit at the bottom
     paddingHorizontal: 16,
   },
   title: {
@@ -240,6 +264,18 @@ const styles = StyleSheet.create({
   devButton: {
     marginTop: 24,
     alignItems: 'center',
+  },
+  credit: {
+    marginTop: 'auto', // push to the bottom when the list is short…
+    paddingTop: 24, // …and keep a gap above it when the list is long
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  creditText: {
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    color: colors.muted,
   },
   bottomBar: {
     position: 'absolute',
