@@ -198,3 +198,110 @@ test('rejects payers over the total and an unknown category', () => {
     'Payers add up to 2100 but the total is 2000 (100 too much).',
   ]);
 });
+
+// --- Empty or 0 total: only the total error, nothing repeated ---
+
+const TOTAL_ERROR = 'Total must be a whole number of rupees, more than 0.';
+
+test('empty total with one payer shows only the total error', () => {
+  // What the Add Expense screen sends when the amount box is empty:
+  // the single payer's amount is the (missing) total.
+  const result = prepareExpense({
+    amount: NaN,
+    category: 'food',
+    split_type: 'equal',
+    payers: [{ member_id: 'A', amount: NaN }],
+    participants: [{ member_id: 'A' }, { member_id: 'B' }],
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors, [TOTAL_ERROR]);
+});
+
+test('total of 0 with one payer shows only the total error', () => {
+  const result = prepareExpense({
+    amount: 0,
+    category: 'food',
+    split_type: 'equal',
+    payers: [{ member_id: 'A', amount: 0 }],
+    participants: [{ member_id: 'A' }],
+  });
+  assert.deepEqual(result.errors, [TOTAL_ERROR]);
+});
+
+test('empty total with a custom split does not complain about the share sum', () => {
+  const result = prepareExpense({
+    amount: NaN,
+    category: 'food',
+    split_type: 'custom',
+    payers: [{ member_id: 'A', amount: NaN }],
+    participants: [
+      { member_id: 'A', share: 300 },
+      { member_id: 'B', share: 200 },
+    ],
+  });
+  assert.deepEqual(result.errors, [TOTAL_ERROR]);
+});
+
+test('empty total still reports problems that have nothing to do with it', () => {
+  const result = prepareExpense({
+    amount: NaN,
+    category: 'food',
+    split_type: 'equal',
+    payers: [{ member_id: 'A', amount: NaN }],
+    participants: [],
+  });
+  assert.deepEqual(result.errors, [TOTAL_ERROR, 'Pick at least one person this expense is for.']);
+});
+
+// --- Editing: a saved expense goes through prepareExpense() again ---
+
+test('editing: re-preparing a saved expense changes nothing', () => {
+  // An expense as it comes back from the database (shares already stored).
+  const saved = equal(1000, { A: 1000 }, ['A', 'B', 'C']);
+  const again = prepareExpense(saved);
+  assert.ok(again.ok);
+  assert.deepEqual(again.expense.participants, saved.participants);
+  assert.deepEqual(again.expense.payers, saved.payers);
+});
+
+test('editing: an equal split is re-worked from the new amount, not the old shares', () => {
+  // Saved as 1000 for A, B, C (334/333/333), then edited to 900 for A, B.
+  const saved = equal(1000, { A: 1000 }, ['A', 'B', 'C']);
+  const edited = prepareExpense({
+    ...saved,
+    amount: 900,
+    payers: [{ member_id: 'A', amount: 900 }],
+    // Old shares are still attached — equal split must ignore them.
+    participants: saved.participants.filter((p) => p.member_id !== 'C'),
+  });
+  assert.ok(edited.ok);
+  assert.deepEqual(edited.expense.participants, [
+    { member_id: 'A', share: 450 },
+    { member_id: 'B', share: 450 },
+  ]);
+});
+
+test('editing: a custom split keeps the newly typed shares', () => {
+  const saved = expense({
+    amount: 1200,
+    category: 'food',
+    split_type: 'custom',
+    payers: [{ member_id: 'C', amount: 1200 }],
+    participants: [
+      { member_id: 'A', share: 500 },
+      { member_id: 'B', share: 700 },
+    ],
+  });
+  const edited = prepareExpense({
+    ...saved,
+    participants: [
+      { member_id: 'A', share: 600 },
+      { member_id: 'B', share: 600 },
+    ],
+  });
+  assert.ok(edited.ok);
+  assert.deepEqual(edited.expense.participants, [
+    { member_id: 'A', share: 600 },
+    { member_id: 'B', share: 600 },
+  ]);
+});

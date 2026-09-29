@@ -90,7 +90,11 @@ export function prepareExpense(input) {
   const participants = input.participants || [];
 
   // --- Total ---
-  if (!isRupees(amount) || amount === 0) {
+  // If the total itself is missing or wrong, checks that compare against it
+  // (payer amounts, custom share sums) would only repeat the same problem in
+  // a more confusing way — so those are skipped until the total is fixed.
+  const totalOk = isRupees(amount) && amount > 0;
+  if (!totalOk) {
     errors.push('Total must be a whole number of rupees, more than 0.');
   }
 
@@ -103,8 +107,12 @@ export function prepareExpense(input) {
   }
 
   // --- Payers: at least one, whole rupees, adding up to the total ---
+  // (Amount checks skipped when the total is bad: with one payer, their
+  // amount IS the total, so it would just be the total error twice.)
   if (payers.length === 0) {
     errors.push('Pick at least one person who paid.');
+  } else if (!totalOk) {
+    // Already reported above.
   } else if (!payers.every((p) => isRupees(p.amount) && p.amount > 0)) {
     errors.push('Each payer amount must be a whole number of rupees, more than 0.');
   } else if (sum(payers, 'amount') !== amount) {
@@ -137,7 +145,7 @@ export function prepareExpense(input) {
       for (const p of zeroShares) {
         errors.push(`Remove ${p.name || p.member_id} or give them a share.`);
       }
-    } else if (sum(participants, 'share') !== amount) {
+    } else if (totalOk && sum(participants, 'share') !== amount) {
       const shared = sum(participants, 'share');
       errors.push(
         `Shares add up to ${shared} but the total is ${amount} (${describeGap(shared, amount)}).`

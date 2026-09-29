@@ -2,18 +2,22 @@
 //
 // Top: each member and their balance, coloured
 //   green = gets money back, red = owes money, grey = settled up.
-// Below: the settle-up suggestions from settleUp(), each with a
+// Then: the settle-up suggestions from settleUp(), each with a
 // "Mark as paid" button.
+// Last: payments already recorded ("D paid B Rs 350"), each with a "Delete"
+// button in case "Mark as paid" was tapped by mistake.
 //
 // It only displays what it's given — the maths happens in GroupScreen
-// (using split.js) and saving the payment happens there too.
+// (using split.js) and saving/deleting payments happens there too.
 //
 // Props:
-//   members     live members of the group
-//   balances    { [memberId]: rupees } from computeBalances()
-//   transfers   [{ fromId, toId, amount }] from settleUp()
-//   names       { [memberId]: name }
-//   onMarkPaid  called with a transfer when "Mark as paid" is tapped
+//   members          live members of the group
+//   balances         { [memberId]: rupees } from computeBalances()
+//   transfers        [{ fromId, toId, amount }] from settleUp()
+//   payments         from listPayments(), newest first
+//   names            { [memberId]: name }
+//   onMarkPaid       called with a transfer when "Mark as paid" is tapped
+//   onDeletePayment  called with a payment when its "Delete" is tapped
 
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import AppButton from './AppButton';
@@ -27,7 +31,20 @@ function balanceColor(balance) {
   return colors.grey;
 }
 
-export default function BalancesTab({ members, balances, transfers, names, onMarkPaid }) {
+// Name for a member id, even if they've since been removed from the group.
+function nameOf(names, id) {
+  return names[id] || 'Removed member';
+}
+
+export default function BalancesTab({
+  members,
+  balances,
+  transfers,
+  payments,
+  names,
+  onMarkPaid,
+  onDeletePayment,
+}) {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.heading}>Balances</Text>
@@ -51,8 +68,7 @@ export default function BalancesTab({ members, balances, transfers, names, onMar
         <View key={`${transfer.fromId}-${transfer.toId}`} style={styles.row}>
           <View style={styles.transferText}>
             <Text style={styles.name}>
-              {names[transfer.fromId] || 'Removed member'} pays{' '}
-              {names[transfer.toId] || 'Removed member'}
+              {nameOf(names, transfer.fromId)} pays {nameOf(names, transfer.toId)}
             </Text>
             <Text style={styles.amount}>{formatRupees(transfer.amount)}</Text>
           </View>
@@ -61,6 +77,29 @@ export default function BalancesTab({ members, balances, transfers, names, onMar
             variant="secondary"
             small
             onPress={() => onMarkPaid(transfer)}
+          />
+        </View>
+      ))}
+
+      {/* Only shown once there's at least one payment. */}
+      {payments.length > 0 && (
+        <Text style={[styles.heading, styles.secondHeading]}>Payments</Text>
+      )}
+      {payments.map((payment) => (
+        <View key={payment.id} style={styles.row}>
+          <View style={styles.transferText}>
+            <Text style={styles.name}>
+              {nameOf(names, payment.fromId)} paid {nameOf(names, payment.toId)}{' '}
+              {formatRupees(payment.amount)}
+            </Text>
+            {/* created_at is milliseconds; show it as the phone's local date. */}
+            <Text style={styles.date}>{new Date(payment.created_at).toLocaleDateString()}</Text>
+          </View>
+          <AppButton
+            title="Delete"
+            variant="danger"
+            small
+            onPress={() => onDeletePayment(payment)}
           />
         </View>
       ))}
@@ -113,5 +152,9 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: colors.text,
+  },
+  date: {
+    fontSize: 13,
+    color: colors.muted,
   },
 });

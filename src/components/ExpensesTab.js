@@ -1,21 +1,22 @@
 // ExpensesTab.js — the "Expenses" tab on the group screen.
 //
 // Shows the group's expenses (already sorted newest first by listExpenses)
-// and an "Add expense" button. It only displays what it's given — loading
-// and saving happen in GroupScreen.
+// and an "Add expense" button. Tapping a row opens it for editing. It only
+// displays what it's given — loading and saving happen elsewhere.
 //
 // Props:
-//   expenses      from listExpenses()
-//   names         { [memberId]: name } for showing who paid
-//   canAdd        false when the group has no members yet
-//   onAddExpense  called when "Add expense" is tapped
+//   expenses       from listExpenses()
+//   names          { [memberId]: name } for showing who paid
+//   canAdd         false when the group has no members yet
+//   onAddExpense   called when "Add expense" is tapped
+//   onOpenExpense  called with the expense when its row is tapped
 
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import AppButton from './AppButton';
 import { categoryLabel, formatRupees, joinNames } from '../logic/format';
 import { colors, radius, space } from './theme';
 
-export default function ExpensesTab({ expenses, names, canAdd, onAddExpense }) {
+export default function ExpensesTab({ expenses, names, canAdd, onAddExpense, onOpenExpense }) {
   return (
     <FlatList
       data={expenses}
@@ -30,20 +31,27 @@ export default function ExpensesTab({ expenses, names, canAdd, onAddExpense }) {
         </View>
       }
       ListEmptyComponent={<Text style={styles.empty}>No expenses yet.</Text>}
-      renderItem={({ item }) => <ExpenseRow expense={item} names={names} />}
+      renderItem={({ item }) => (
+        <ExpenseRow expense={item} names={names} onPress={() => onOpenExpense(item)} />
+      )}
     />
   );
 }
 
 // One expense: title and amount on top; category, who paid, and how many
-// people it was for underneath.
-function ExpenseRow({ expense, names }) {
+// people it was for underneath. The whole row is tappable.
+function ExpenseRow({ expense, names, onPress }) {
   const payerNames = expense.payers.map((p) => names[p.member_id] || 'Removed member');
   const count = expense.participants.length;
   const title = expense.description || categoryLabel(expense.category);
 
   return (
-    <View style={styles.row}>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityHint="Edit this expense"
+      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+    >
       <View style={styles.rowTop}>
         <Text style={styles.title} numberOfLines={1}>
           {title}
@@ -54,7 +62,7 @@ function ExpenseRow({ expense, names }) {
         {categoryLabel(expense.category)} · Paid by {joinNames(payerNames)} · For{' '}
         {count} {count === 1 ? 'person' : 'people'}
       </Text>
-    </View>
+    </Pressable>
   );
 }
 
@@ -83,6 +91,9 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     padding: space.md,
     gap: space.xs,
+  },
+  rowPressed: {
+    opacity: 0.6,
   },
   rowTop: {
     flexDirection: 'row',

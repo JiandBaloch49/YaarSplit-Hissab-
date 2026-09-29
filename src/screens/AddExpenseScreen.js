@@ -1,25 +1,38 @@
-// AddExpenseScreen.js — the form for adding an expense to a group.
+// AddExpenseScreen.js — the form for adding OR editing an expense.
+//
+// Opened from the Expenses tab: "Add expense" opens it empty; tapping an
+// expense row opens it pre-filled (header says "Edit expense", see App.js),
+// with a "Delete expense" button at the bottom.
 //
 // The simple case needs no extra taps: equal split, one payer, everyone
 // ticked. "More options" unlocks:
 //   - Custom split: type each person's exact share
 //   - Several payers: type how much each person paid
 //
-// Everything typed is passed to addExpense(), which runs prepareExpense()
-// (src/logic/split.js). If that finds problems, its messages are shown above
-// the Save button and nothing is saved.
+// Everything typed is passed to addExpense() / updateExpense(), which both
+// run prepareExpense() (src/logic/split.js). If that finds problems, its
+// messages are shown above the Save button and nothing is saved.
 //
-// Route params: groupId
+// Route params:
+//   groupId    the group the expense belongs to
+//   expenseId  only when editing: which expense to load
 
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import AmountInput from '../components/AmountInput';
 import AppButton from '../components/AppButton';
 import CheckRow from '../components/CheckRow';
 import Chip from '../components/Chip';
 import ErrorList from '../components/ErrorList';
 import { colors, radius, space } from '../components/theme';
-import { addExpense, listMembers } from '../db/queries';
+import {
+  addExpense,
+  deleteExpense,
+  getExpense,
+  listMembers,
+  listMembersByIds,
+  updateExpense,
+} from '../db/queries';
 import { CATEGORIES } from '../logic/split';
 import { categoryLabel, formatRupees, parseRupees } from '../logic/format';
 
@@ -34,28 +47,115 @@ function sumTyped(texts) {
   return total;
 }
 
-export default function AddExpenseScreen({ route, navigation }) {
-  const { groupId } = route.params;
+// Turn [{ member_id, amount: 500 }] into { memberId: '500' } for the text
+// boxes. `field` is 'amount' (payers) or 'share' (participants).
+function toTextMap(list, field) {
+  const map = {};
+  for (const item of list) map[item.member_id] = String(item[field]);
+  return map;
+}
 
-  // Members are read once when the screen opens (the sync API returns them
-  // straight away). They can't change while this form is open, and reloading
-  // on focus would risk wiping what the user has picked.
-  const [members] = useState(() => listMembers(groupId));
+/**
+ * Work out everything the form starts with. Runs once when the screen opens
+ * (the sync DB API returns straight away).
+ *
+ * Returns { members, values, notFound }:
+ *   members   who can be picked
+ *   values    the starting value of every field
+ *   notFound  true if we were asked to edit an expense that's gone
+ */
+function loadForm(groupId, expenseId) {
+  const liveMembers = listMembers(groupId);
+
+  // --- Adding: empty form, equal split, first member paid, everyone ticked ---
+  if (!expenseId) {
+    return {
+      notFound: false,
+      members: liveMembers,
+      values: {
+        title: '',
+        amountText: '',
+        category: 'food',
+        paidBy: liveMembers[0]?.id,
+        forIds: liveMembers.map((m) => m.id),
+        splitType: 'equal',
+        severalPayers: false,
+        payerAmounts: {},
+        shares: {},
+      },
+    };
+  }
+
+  // --- Editing: fill the form from the saved expense ---
+  const expense = getExpense(expenseId);
+  if (!expense) {
+    return { notFound: true, members: liveMembers, values: null };
+  }
+
+  // An old expense may mention someone who has since been removed from the
+  // group. Add them back to the form (marked "removed") so saving keeps them
+  // in the expense instead of silently dropping them.
+  const liveIds = new Set(liveMembers.map((m) => m.id));
+  const usedIds = [...expense.payers, ...expense.participants].map((p) => p.member_id);
+  const removedIds = [...new Set(usedIds)].filter((id) => !liveIds.has(id));
+  const removedMembers = listMembersByIds(groupId, removedIds).map((m) => ({
+    ...m,
+    name: `${m.name} (removed)`,
+  }));
+  // Keep everyone in the order they joined — the same order used when it
+  // was first saved — so an equal split gives leftover rupees to the same
+  // people as before.
+  const members = [...liveMembers, ...removedMembers].sort((a, b) => a.created_at - b.created_at);
+
+  const severalPayers = expense.payers.length > 1;
+  return {
+    notFound: false,
+    members,
+    values: {
+      title: expense.description,
+      amountText: String(expense.amount),
+      category: expense.category,
+      // With one payer, they're the "Paid by" chip. With several, the chip
+      // isn't used, so just default it to the first member.
+      paidBy: severalPayers ? members[0]?.id : expense.payers[0].member_id,
+      forIds: expense.participants.map((p) => p.member_id),
+      splitType: expense.split_type,
+      severalPayers,
+      payerAmounts: severalPayers ? toTextMap(expense.payers, 'amount') : {},
+      // Equal-split shares are always re-worked on save, so only custom
+      // splits need their shares in the boxes.
+      shares: expense.split_type === 'custom' ? toTextMap(expense.participants, 'share') : {},
+    },
+  };
+}
+
+export default function AddExpenseScreen({ route, navigation }) {
+  const { groupId, expenseId } = route.params;
+  const editing = Boolean(expenseId);
+
+  // Read once when the screen opens. Members can't change while this form is
+  // open, and reloading on focus would wipe what the user has picked.
+  const [form] = useState(() => loadForm(groupId, expenseId));
+  const { members } = form;
+  const start = form.values || {}; // empty only when the expense is gone
 
   // --- Basic fields ---
-  const [title, setTitle] = useState('');
-  const [amountText, setAmountText] = useState('');
-  const [category, setCategory] = useState('food');
-  const [paidBy, setPaidBy] = useState(members[0]?.id); // single payer
-  // Who it was for: everyone ticked by default.
-  const [forIds, setForIds] = useState(() => members.map((m) => m.id));
+  const [title, setTitle] = useState(start.title);
+  const [amountText, setAmountText] = useState(start.amountText);
+  const [category, setCategory] = useState(start.category);
+  const [paidBy, setPaidBy] = useState(start.paidBy); // single payer
+  const [forIds, setForIds] = useState(start.forIds); // who it was for
 
   // --- "More options" ---
-  const [showMore, setShowMore] = useState(false);
-  const [splitType, setSplitType] = useState('equal'); // 'equal' | 'custom'
-  const [severalPayers, setSeveralPayers] = useState(false);
-  const [payerAmounts, setPayerAmounts] = useState({}); // { memberId: text }
-  const [shares, setShares] = useState({}); // { memberId: text }, custom split
+  // Open straight away when editing an expense that uses them, so it's clear
+  // why the form looks different.
+  const [showMore, setShowMore] = useState(
+    start.splitType === 'custom' || Boolean(start.severalPayers)
+  );
+  const [splitType, setSplitType] = useState(start.splitType); // 'equal' | 'custom'
+  const [severalPayers, setSeveralPayers] = useState(start.severalPayers);
+  const [payerAmounts, setPayerAmounts] = useState(start.payerAmounts); // { memberId: text }
+  const [shares, setShares] = useState(start.shares); // { memberId: text }, custom split
 
   const [errors, setErrors] = useState([]);
 
@@ -108,12 +208,36 @@ export default function AddExpenseScreen({ route, navigation }) {
   }
 
   function handleSave() {
-    const result = addExpense(groupId, buildInput());
+    const input = buildInput();
+    // Both run prepareExpense() first and save nothing if it finds problems.
+    const result = editing ? updateExpense(expenseId, input) : addExpense(groupId, input);
     if (!result.ok) {
       setErrors(result.errors); // shown above the Save button; nothing saved
       return;
     }
     navigation.goBack(); // GroupScreen reloads when it comes back into focus
+  }
+
+  function handleDelete() {
+    Alert.alert('Delete this expense?', 'It will be taken out of everyone’s balances.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          deleteExpense(expenseId); // soft delete: deleted = 1, synced = 0
+          navigation.goBack();
+        },
+      },
+    ]);
+  }
+
+  if (form.notFound) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.muted}>This expense was deleted.</Text>
+      </View>
+    );
   }
 
   if (members.length === 0) {
@@ -236,6 +360,7 @@ export default function AddExpenseScreen({ route, navigation }) {
       <View style={styles.saveArea}>
         <ErrorList errors={errors} />
         <AppButton title="Save" onPress={handleSave} />
+        {editing && <AppButton title="Delete expense" variant="danger" onPress={handleDelete} />}
       </View>
     </ScrollView>
   );

@@ -20,6 +20,7 @@ import {
   addMember,
   addPayment,
   deleteMember,
+  deletePayment,
   listExpenses,
   listMembers,
   listPayments,
@@ -82,6 +83,28 @@ export default function GroupScreen({ route, navigation }) {
     ]);
   }
 
+  // Undo a payment (e.g. "Mark as paid" tapped by mistake). It's a soft
+  // delete, so the balances simply go back to how they were before it.
+  function handleDeletePayment(payment) {
+    const from = names[payment.fromId] || 'Removed member';
+    const to = names[payment.toId] || 'Removed member';
+    Alert.alert(
+      'Delete this payment?',
+      `${from} paid ${to} ${formatRupees(payment.amount)}. Balances will go back to before it.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            deletePayment(payment.id);
+            reload();
+          },
+        },
+      ]
+    );
+  }
+
   function handleAddMember(name) {
     addMember(groupId, name);
     reload();
@@ -120,6 +143,10 @@ export default function GroupScreen({ route, navigation }) {
           names={names}
           canAdd={members.length > 0}
           onAddExpense={() => navigation.navigate('AddExpense', { groupId })}
+          // Same screen, pre-filled: passing expenseId switches it to editing.
+          onOpenExpense={(expense) =>
+            navigation.navigate('AddExpense', { groupId, expenseId: expense.id })
+          }
         />
       )}
       {tab === 'balances' && (
@@ -127,8 +154,10 @@ export default function GroupScreen({ route, navigation }) {
           members={members}
           balances={balances}
           transfers={transfers}
+          payments={payments}
           names={names}
           onMarkPaid={handleMarkPaid}
+          onDeletePayment={handleDeletePayment}
         />
       )}
       {tab === 'members' && (

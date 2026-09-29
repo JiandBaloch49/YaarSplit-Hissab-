@@ -6,6 +6,7 @@
 //
 // Navigation is a simple stack (React Navigation native-stack):
 //   Groups  →  Group (Expenses / Balances / Members tabs)  →  AddExpense
+//   (AddExpense is also used for editing an expense.)
 
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
@@ -34,7 +35,10 @@ export default function App() {
         <Stack.Screen
           name="AddExpense"
           component={AddExpenseScreen}
-          options={{ title: 'Add expense' }}
+          // Same screen for both: an expenseId in the params means editing.
+          options={({ route }) => ({
+            title: route.params.expenseId ? 'Edit expense' : 'Add expense',
+          })}
         />
       </Stack.Navigator>
       <StatusBar style="auto" />

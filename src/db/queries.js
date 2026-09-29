@@ -99,6 +99,22 @@ export function listMembers(groupId) {
   );
 }
 
+// Members of a group with these ids, INCLUDING removed ones (deleted = 1).
+//
+// Only for editing an old expense: it may mention someone who has since been
+// removed. The form needs their name so it can keep them in the expense —
+// otherwise saving would silently drop them and change everyone's balance.
+export function listMembersByIds(groupId, ids) {
+  if (ids.length === 0) return [];
+  // One "?" per id: "id IN (?, ?, ?)". The ids themselves are passed as
+  // parameters, never pasted into the SQL text.
+  const placeholders = ids.map(() => '?').join(', ');
+  return getDb().getAllSync(
+    `SELECT * FROM members WHERE group_id = ? AND id IN (${placeholders}) ORDER BY created_at, rowid`,
+    [groupId, ...ids]
+  );
+}
+
 /**
  * Soft-delete a member — but only if they are fully settled up.
  *
@@ -223,6 +239,60 @@ export function listExpenses(groupId) {
     [groupId]
   );
   return rows.map(expenseFromRow);
+}
+
+// One live expense by id (arrays, not JSON), or null if it's gone.
+// Used to pre-fill the form when editing.
+export function getExpense(id) {
+  const row = getDb().getFirstSync('SELECT * FROM expenses WHERE id = ? AND deleted = 0', [id]);
+  return row ? expenseFromRow(row) : null;
+}
+
+/**
+ * Save changes to an existing expense.
+ *
+ * Works exactly like addExpense(): the new values ALWAYS go through
+ * prepareExpense() first, and nothing is saved if it finds problems.
+ * On success, updated_at is set to now and synced goes back to 0 (the
+ * change hasn't been sent anywhere yet). id, group_id and created_at never
+ * change, so the expense keeps its place in the list.
+ *
+ * Returns ONE of:
+ *   { ok: true,  expense }  — saved; the updated expense (arrays, not JSON)
+ *   { ok: false, errors }   — nothing was saved; show these messages
+ */
+export function updateExpense(id, input) {
+  const result = prepareExpense(input);
+  if (!result.ok) {
+    return { ok: false, errors: result.errors };
+  }
+
+  const prepared = result.expense;
+  const time = now();
+  const { changes } = getDb().runSync(
+    `UPDATE expenses
+        SET description = ?, amount = ?, category = ?, split_type = ?,
+            payers = ?, participants = ?,
+            updated_at = ?, synced = 0
+      WHERE id = ? AND deleted = 0`,
+    [
+      prepared.description || '',
+      prepared.amount,
+      prepared.category,
+      prepared.split_type,
+      JSON.stringify(prepared.payers), // array → JSON text for SQLite
+      JSON.stringify(prepared.participants),
+      time,
+      id,
+    ]
+  );
+
+  // changes = how many rows the UPDATE touched. 0 means the expense was
+  // deleted (or never existed), so there was nothing to save into.
+  if (changes === 0) {
+    return { ok: false, errors: ['This expense was deleted, so it can’t be edited.'] };
+  }
+  return { ok: true, expense: getExpense(id) };
 }
 
 export function deleteExpense(id) {
