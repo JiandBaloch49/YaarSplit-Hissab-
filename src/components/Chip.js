@@ -1,20 +1,32 @@
-// Chip.js — a small rounded "pill" you can tap to select.
+// Chip.js — a rounded "pill" you can tap to select.
 //
-// Used for picking a category, a split type, the tabs on the group screen,
-// and "Paid by". Selected chips are filled blue.
+// Used for picking a category, who paid, and the split options.
 //
-// Props: label, selected (true/false), onPress
+// Props:
+//   label, selected (true/false), onPress
+//   tone   colour when selected: 'ink' (dark, default) or 'gets' (blue).
+//          The design uses ink for Category and blue for "Paid by".
 
 import { Pressable, StyleSheet, Text } from 'react-native';
-import { colors, space } from './theme';
+import { colors, fonts, radius } from '../theme';
 
-export default function Chip({ label, selected, onPress }) {
+const SELECTED_COLOR = {
+  ink: colors.ink,
+  gets: colors.gets,
+};
+
+export default function Chip({ label, selected, onPress, tone = 'ink' }) {
+  const selectedColor = SELECTED_COLOR[tone];
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
       accessibilityState={{ selected }}
-      style={[styles.chip, selected && styles.selected]}
+      style={({ pressed }) => [
+        styles.chip,
+        selected && { backgroundColor: selectedColor, borderColor: selectedColor },
+        pressed && styles.pressed,
+      ]}
     >
       <Text style={[styles.text, selected && styles.selectedText]}>{label}</Text>
     </Pressable>
@@ -23,23 +35,24 @@ export default function Chip({ label, selected, onPress }) {
 
 const styles = StyleSheet.create({
   chip: {
-    paddingVertical: space.sm,
-    paddingHorizontal: space.md + 2,
-    borderRadius: 999, // fully rounded ends
+    minHeight: 38,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    borderRadius: radius.chip,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
+    borderColor: colors.line,
+    backgroundColor: colors.surface,
   },
-  selected: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+  pressed: {
+    opacity: 0.7,
   },
   text: {
+    fontFamily: fonts.medium,
     fontSize: 15,
-    color: colors.text,
+    color: colors.ink,
   },
   selectedText: {
-    color: colors.primaryText,
-    fontWeight: '600',
+    fontFamily: fonts.semibold,
+    color: colors.surface,
   },
 });

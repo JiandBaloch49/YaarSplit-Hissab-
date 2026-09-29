@@ -319,3 +319,29 @@ export function settleUp(balances) {
 
   return transfers;
 }
+
+/**
+ * Short summary of a group for the Groups list:
+ *   { memberCount, totalSpent, toSettle }
+ *
+ * - totalSpent: all expenses added up (payments aren't spending, so they
+ *   don't count).
+ * - toSettle: how much money still has to change hands for everyone to be
+ *   even. That's the total of everyone who is owed money (positive
+ *   balances) — which always equals the total of everyone who owes.
+ *   0 means the group is settled up.
+ *
+ * Same inputs as computeBalances: live rows, JSON already parsed.
+ */
+export function summarizeGroup(members, expenses, payments) {
+  let totalSpent = 0;
+  for (const expense of expenses) totalSpent += expense.amount;
+
+  const balances = computeBalances(members, expenses, payments);
+  let toSettle = 0;
+  for (const balance of Object.values(balances)) {
+    if (balance > 0) toSettle += balance;
+  }
+
+  return { memberCount: members.length, totalSpent, toSettle };
+}

@@ -3,79 +3,95 @@
 // Props:
 //   title     text on the button
 //   onPress   what to do when tapped
-//   variant   'primary' (filled blue, default), 'secondary' (outlined),
-//             or 'danger' (red text, for things like "Remove")
+//   variant   'primary'   filled dark ink (default) — the main action
+//             'secondary' white with an ink outline — e.g. "Mark as paid"
+//             'danger'    white with orange text — e.g. "Remove", "Delete"
+//   icon      optional icon component shown before the title, e.g. Plus
 //   small     true for a compact button inside a list row
 //   disabled  greys it out and ignores taps
+//   style     extra style, e.g. to float the button over a list
 
 import { Pressable, StyleSheet, Text } from 'react-native';
-import { colors, radius, space } from './theme';
+import { colors, fonts, radius } from '../theme';
 
-export default function AppButton({ title, onPress, variant = 'primary', small, disabled }) {
+const TEXT_COLOR = {
+  primary: colors.surface,
+  secondary: colors.ink,
+  danger: colors.owes,
+};
+
+export default function AppButton({
+  title,
+  onPress,
+  variant = 'primary',
+  icon: Icon,
+  small,
+  disabled,
+  style,
+}) {
+  const textColor = TEXT_COLOR[variant];
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
       accessibilityRole="button"
+      accessibilityState={{ disabled: Boolean(disabled) }}
       style={({ pressed }) => [
         styles.base,
-        small && styles.small,
+        small ? styles.small : styles.large,
         styles[variant],
         pressed && styles.pressed,
         disabled && styles.disabled,
+        style,
       ]}
     >
-      <Text style={[styles.text, small && styles.smallText, styles[`${variant}Text`]]}>
-        {title}
-      </Text>
+      {Icon && <Icon size={small ? 16 : 20} color={textColor} strokeWidth={2.25} />}
+      <Text style={[styles.text, small && styles.smallText, { color: textColor }]}>{title}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   base: {
-    borderRadius: radius,
-    paddingVertical: space.md,
-    paddingHorizontal: space.lg,
+    flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: radius.button,
+    borderWidth: 1.5,
+  },
+  large: {
+    minHeight: 56,
+    paddingHorizontal: 24,
   },
   small: {
-    paddingVertical: space.xs + 2,
-    paddingHorizontal: space.md,
+    minHeight: 40,
+    paddingHorizontal: 14,
+    borderRadius: 14,
   },
   primary: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+    backgroundColor: colors.ink,
+    borderColor: colors.ink,
   },
   secondary: {
-    backgroundColor: colors.card,
-    borderColor: colors.primary,
+    backgroundColor: colors.surface,
+    borderColor: colors.ink,
   },
   danger: {
-    backgroundColor: colors.card,
-    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    borderColor: colors.line,
   },
   pressed: {
-    opacity: 0.7,
+    opacity: 0.75,
   },
   disabled: {
-    opacity: 0.4,
+    opacity: 0.35,
   },
   text: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontFamily: fonts.semibold,
+    fontSize: 17,
   },
   smallText: {
-    fontSize: 14,
-  },
-  primaryText: {
-    color: colors.primaryText,
-  },
-  secondaryText: {
-    color: colors.primary,
-  },
-  dangerText: {
-    color: colors.red,
+    fontSize: 15,
   },
 });

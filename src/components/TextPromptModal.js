@@ -14,7 +14,7 @@
 import { useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import AppButton from './AppButton';
-import { colors, radius, space } from './theme';
+import { colors, fonts, radius, text } from '../theme';
 
 export default function TextPromptModal({
   visible,
@@ -24,17 +24,17 @@ export default function TextPromptModal({
   onSubmit,
   onCancel,
 }) {
-  const [text, setText] = useState('');
-  const trimmed = text.trim();
+  const [value, setValue] = useState('');
+  const trimmed = value.trim();
 
   function handleSubmit() {
     if (trimmed === '') return;
     onSubmit(trimmed);
-    setText(''); // start empty next time it opens
+    setValue(''); // start empty next time it opens
   }
 
   function handleCancel() {
-    setText('');
+    setValue('');
     onCancel();
   }
 
@@ -49,10 +49,10 @@ export default function TextPromptModal({
           <Text style={styles.title}>{title}</Text>
           <TextInput
             style={styles.input}
-            value={text}
-            onChangeText={setText}
+            value={value}
+            onChangeText={setValue}
             placeholder={placeholder}
-            placeholderTextColor={colors.grey}
+            placeholderTextColor={colors.muted}
             autoFocus
             returnKeyType="done"
             onSubmitEditing={handleSubmit}
@@ -74,32 +74,32 @@ export default function TextPromptModal({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)', // dim the screen behind
+    backgroundColor: 'rgba(23, 34, 59, 0.45)', // ink, see-through — dims the screen behind
     justifyContent: 'center',
-    padding: space.xl,
+    padding: 20,
   },
   card: {
-    backgroundColor: colors.card,
-    borderRadius: radius + 4,
-    padding: space.lg,
-    gap: space.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.card,
+    padding: 20,
+    gap: 16,
   },
   title: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: colors.text,
+    ...text.title,
   },
   input: {
+    minHeight: 52,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius,
-    padding: space.md,
-    fontSize: 16,
-    color: colors.text,
+    borderColor: colors.line,
+    borderRadius: radius.input,
+    paddingHorizontal: 16,
+    fontFamily: fonts.regular,
+    fontSize: 17,
+    color: colors.ink,
   },
   buttons: {
     flexDirection: 'row',
-    gap: space.md,
+    gap: 12,
   },
   buttonWrap: {
     flex: 1,

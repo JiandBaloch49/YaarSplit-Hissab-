@@ -1,9 +1,9 @@
 // BalancesTab.js — the "Balances" tab on the group screen.
 //
-// Top: each member and their balance, coloured
-//   green = gets money back, red = owes money, grey = settled up.
-// Then: the settle-up suggestions from settleUp(), each with a
-// "Mark as paid" button.
+// Top: the balance chart (see BalanceChart.js) — blue bars to the right for
+// people who get money back, orange bars to the left for people who owe.
+// Then: "Settle up" — the payments from settleUp() that clear everything,
+// each with a "Mark as paid" button.
 // Last: payments already recorded ("D paid B Rs 350"), each with a "Delete"
 // button in case "Mark as paid" was tapped by mistake.
 //
@@ -20,20 +20,24 @@
 //   onDeletePayment  called with a payment when its "Delete" is tapped
 
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AppButton from './AppButton';
-import { describeBalance, formatRupees } from '../logic/format';
-import { colors, radius, space } from './theme';
-
-// Pick the colour for a balance: + gets money, - owes money, 0 settled.
-function balanceColor(balance) {
-  if (balance > 0) return colors.green;
-  if (balance < 0) return colors.red;
-  return colors.grey;
-}
+import BalanceChart from './BalanceChart';
+import Card from './Card';
+import { ArrowRight } from './icons';
+import { formatRupees, formatShortDate } from '../logic/format';
+import { colors, fonts, money, text } from '../theme';
 
 // Name for a member id, even if they've since been removed from the group.
 function nameOf(names, id) {
   return names[id] || 'Removed member';
+}
+
+// "1 payment clears everything." / "3 payments clear everything."
+function settleUpSubtitle(count) {
+  if (count === 0) return 'Everyone is settled up.';
+  if (count === 1) return '1 payment clears everything.';
+  return `${count} payments clear everything.`;
 }
 
 export default function BalancesTab({
@@ -45,116 +49,130 @@ export default function BalancesTab({
   onMarkPaid,
   onDeletePayment,
 }) {
+  const insets = useSafeAreaInsets();
+
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.heading}>Balances</Text>
-      {members.length === 0 && <Text style={styles.empty}>No members yet.</Text>}
-      {members.map((member) => {
-        const balance = balances[member.id] || 0;
-        return (
-          <View key={member.id} style={styles.row}>
-            <Text style={styles.name}>{member.name}</Text>
-            <Text style={[styles.balance, { color: balanceColor(balance) }]}>
-              {describeBalance(balance)}
-            </Text>
-          </View>
-        );
-      })}
-
-      <Text style={[styles.heading, styles.secondHeading]}>Settle up</Text>
-      {transfers.length === 0 && <Text style={styles.empty}>Everyone is settled up.</Text>}
-      {transfers.map((transfer) => (
-        // A pair only appears once in settleUp's result, so from+to is unique.
-        <View key={`${transfer.fromId}-${transfer.toId}`} style={styles.row}>
-          <View style={styles.transferText}>
-            <Text style={styles.name}>
-              {nameOf(names, transfer.fromId)} pays {nameOf(names, transfer.toId)}
-            </Text>
-            <Text style={styles.amount}>{formatRupees(transfer.amount)}</Text>
-          </View>
-          <AppButton
-            title="Mark as paid"
-            variant="secondary"
-            small
-            onPress={() => onMarkPaid(transfer)}
-          />
-        </View>
-      ))}
-
-      {/* Only shown once there's at least one payment. */}
-      {payments.length > 0 && (
-        <Text style={[styles.heading, styles.secondHeading]}>Payments</Text>
+    <ScrollView contentContainerStyle={[styles.container, { paddingBottom: 24 + insets.bottom }]}>
+      {members.length === 0 ? (
+        <Text style={styles.empty}>Add your friends in the Members tab first.</Text>
+      ) : (
+        <Card>
+          <BalanceChart members={members} balances={balances} />
+        </Card>
       )}
-      {payments.map((payment) => (
-        <View key={payment.id} style={styles.row}>
-          <View style={styles.transferText}>
-            <Text style={styles.name}>
-              {nameOf(names, payment.fromId)} paid {nameOf(names, payment.toId)}{' '}
-              {formatRupees(payment.amount)}
-            </Text>
-            {/* created_at is milliseconds; show it as the phone's local date. */}
-            <Text style={styles.date}>{new Date(payment.created_at).toLocaleDateString()}</Text>
+
+      {/* --- Settle up --- */}
+      <View style={styles.sectionHeader}>
+        <Text style={styles.heading}>Settle up</Text>
+        <Text style={styles.subtitle}>{settleUpSubtitle(transfers.length)}</Text>
+      </View>
+      {transfers.length > 0 && (
+        <Card>
+          {transfers.map((transfer) => (
+            // A pair only appears once in settleUp's result, so from+to is unique.
+            <View key={`${transfer.fromId}-${transfer.toId}`} style={styles.row}>
+              <View style={styles.rowText}>
+                <View style={styles.fromTo}>
+                  <Text style={styles.person} numberOfLines={1}>
+                    {nameOf(names, transfer.fromId)}
+                  </Text>
+                  <ArrowRight size={16} color={colors.muted} strokeWidth={2} />
+                  <Text style={styles.person} numberOfLines={1}>
+                    {nameOf(names, transfer.toId)}
+                  </Text>
+                </View>
+                <Text style={styles.amount}>{formatRupees(transfer.amount)}</Text>
+              </View>
+              <AppButton
+                title="Mark as paid"
+                variant="secondary"
+                small
+                onPress={() => onMarkPaid(transfer)}
+              />
+            </View>
+          ))}
+        </Card>
+      )}
+
+      {/* --- Payments already made (only once there is one) --- */}
+      {payments.length > 0 && (
+        <>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.heading}>Payments</Text>
           </View>
-          <AppButton
-            title="Delete"
-            variant="danger"
-            small
-            onPress={() => onDeletePayment(payment)}
-          />
-        </View>
-      ))}
+          <Card>
+            {payments.map((payment) => (
+              <View key={payment.id} style={styles.row}>
+                <View style={styles.rowText}>
+                  <Text style={styles.person} numberOfLines={2}>
+                    {nameOf(names, payment.fromId)} paid {nameOf(names, payment.toId)}
+                  </Text>
+                  <Text style={styles.amount}>
+                    {formatRupees(payment.amount)} · {formatShortDate(payment.created_at)}
+                  </Text>
+                </View>
+                <AppButton
+                  title="Delete"
+                  variant="danger"
+                  small
+                  onPress={() => onDeletePayment(payment)}
+                />
+              </View>
+            ))}
+          </Card>
+        </>
+      )}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    padding: space.lg,
-    gap: space.sm,
-  },
-  heading: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.muted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  secondHeading: {
-    marginTop: space.lg,
+    padding: 16,
+    paddingTop: 20,
   },
   empty: {
-    color: colors.muted,
+    ...text.small,
+    textAlign: 'center',
+    marginTop: 24,
+  },
+  sectionHeader: {
+    marginTop: 28,
+    marginBottom: 12,
+    marginLeft: 4,
+    gap: 2,
+  },
+  heading: {
+    ...text.heading,
+  },
+  subtitle: {
+    ...text.small,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: space.md,
-    backgroundColor: colors.card,
-    borderRadius: radius,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: space.md,
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
   },
-  transferText: {
+  rowText: {
     flex: 1,
-    gap: 2,
+    gap: 4,
   },
-  name: {
-    fontSize: 16,
-    color: colors.text,
+  fromTo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
-  balance: {
-    fontSize: 16,
-    fontWeight: '600',
+  person: {
+    ...text.bodyStrong,
+    fontSize: 17,
+    flexShrink: 1,
   },
   amount: {
+    fontFamily: fonts.regular,
     fontSize: 15,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  date: {
-    fontSize: 13,
     color: colors.muted,
+    ...money,
   },
 });

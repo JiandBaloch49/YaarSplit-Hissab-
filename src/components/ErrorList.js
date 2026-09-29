@@ -1,10 +1,10 @@
-// ErrorList.js — shows a red box listing what's wrong (e.g. the messages
-// from prepareExpense). Shows nothing when there are no errors.
+// ErrorList.js — shows a box listing what's wrong (e.g. the messages from
+// prepareExpense). Shows nothing when there are no errors.
 //
 // Props: errors (array of strings)
 
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, radius, space } from './theme';
+import { colors, fonts, radius } from '../theme';
 
 export default function ErrorList({ errors }) {
   if (!errors || errors.length === 0) return null;
@@ -22,15 +22,15 @@ export default function ErrorList({ errors }) {
 
 const styles = StyleSheet.create({
   box: {
-    backgroundColor: colors.errorBackground,
-    borderColor: colors.red,
-    borderWidth: 1,
-    borderRadius: radius,
-    padding: space.md,
-    gap: space.xs,
+    backgroundColor: colors.owesSoft,
+    borderRadius: radius.input,
+    padding: 14,
+    gap: 4,
   },
   text: {
-    color: colors.red,
+    fontFamily: fonts.medium,
     fontSize: 15,
+    lineHeight: 21,
+    color: colors.owes,
   },
 });

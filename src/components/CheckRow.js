@@ -1,15 +1,19 @@
-// CheckRow.js — a tappable row with a checkbox and a label.
+// CheckRow.js — one line of the "For whom" checklist on the expense form.
 //
-// Used for "For whom" on the Add Expense screen. Anything passed as
-// `children` is shown on the right side of the row (e.g. a share input for a
-// custom split).
+//   (✓) Hammal                     Rs 400     ← ticked: their share
+//   ( ) Naveed                  Didn't join   ← not ticked
 //
-// Props: label, checked (true/false), onToggle, children (optional)
+// The left side (circle + name) is the tap target. The right side is
+// whatever the screen passes as `right`: a share, a share input for a custom
+// split, or nothing. Unticked rows show "Didn't join" automatically.
+//
+// Props: label, checked (true/false), onToggle, right (optional)
 
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { colors, radius, space } from './theme';
+import { Check } from './icons';
+import { colors, fonts } from '../theme';
 
-export default function CheckRow({ label, checked, onToggle, children }) {
+export default function CheckRow({ label, checked, onToggle, right }) {
   return (
     <View style={styles.row}>
       <Pressable
@@ -17,13 +21,16 @@ export default function CheckRow({ label, checked, onToggle, children }) {
         accessibilityRole="checkbox"
         accessibilityState={{ checked }}
         style={styles.touchArea}
+        hitSlop={4}
       >
-        <View style={[styles.box, checked && styles.boxChecked]}>
-          {checked && <Text style={styles.tick}>✓</Text>}
+        <View style={[styles.circle, checked && styles.circleChecked]}>
+          {checked && <Check size={15} color={colors.surface} strokeWidth={3} />}
         </View>
-        <Text style={styles.label}>{label}</Text>
+        <Text style={[styles.label, !checked && styles.labelOff]} numberOfLines={1}>
+          {label}
+        </Text>
       </Pressable>
-      {children}
+      {checked ? right : <Text style={styles.didntJoin}>Didn’t join</Text>}
     </View>
   );
 }
@@ -32,42 +39,43 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.card,
-    borderRadius: radius,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingRight: space.md,
-    minHeight: 52,
+    minHeight: 54,
+    gap: 12,
   },
-  // The checkbox + name take up all the space not used by `children`,
-  // so the whole left side is easy to tap.
+  // Circle + name fill all the space the right side doesn't use, so the
+  // whole left part of the row is easy to tap.
   touchArea: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    padding: space.md,
-    gap: space.md,
+    gap: 14,
+    paddingVertical: 12,
   },
-  box: {
+  circle: {
     width: 24,
     height: 24,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: colors.grey,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: colors.line,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  boxChecked: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  tick: {
-    color: colors.primaryText,
-    fontSize: 15,
-    fontWeight: '700',
+  circleChecked: {
+    backgroundColor: colors.ink,
+    borderColor: colors.ink,
   },
   label: {
-    fontSize: 16,
-    color: colors.text,
+    flexShrink: 1,
+    fontFamily: fonts.regular,
+    fontSize: 17,
+    color: colors.ink,
+  },
+  labelOff: {
+    color: colors.muted,
+  },
+  didntJoin: {
+    fontFamily: fonts.regular,
+    fontSize: 15,
+    color: colors.muted,
   },
 });

@@ -10,12 +10,24 @@
  * to say "owes" vs "gets".
  */
 export function formatRupees(amount) {
-  const digits = String(Math.abs(amount));
-  // Put a comma before every group of 3 digits from the right:
-  // "1200000" → "1,200,000". The regex finds positions followed by a
-  // multiple of 3 digits up to the end, but not at the very start.
-  const withCommas = digits.replace(/\B(?=(\d{3})+$)/g, ',');
-  return `Rs ${withCommas}`;
+  return `Rs ${addCommas(String(Math.abs(amount)))}`;
+}
+
+// Put a comma before every group of 3 digits from the right:
+// "1200000" → "1,200,000". The regex finds positions followed by a
+// multiple of 3 digits up to the end, but not at the very start.
+function addCommas(digits) {
+  return digits.replace(/\B(?=(\d{3})+$)/g, ',');
+}
+
+/**
+ * Add commas to what the user is typing in the big amount box, so "1200"
+ * shows as "1,200". Anything that isn't plain digits (e.g. "12.5" pasted
+ * in) is shown exactly as typed, so validation can explain the problem.
+ * The screen strips the commas again before parsing (see AddExpenseScreen).
+ */
+export function formatTypedAmount(typed) {
+  return /^\d+$/.test(typed) ? addCommas(typed) : typed;
 }
 
 /**
@@ -64,4 +76,69 @@ export function joinNames(names) {
   if (names.length <= 1) return names[0] || '';
   if (names.length === 2) return `${names[0]} & ${names[1]}`;
   return `${names[0]} + ${names.length - 1} others`;
+}
+
+// Names for dates. We build date text ourselves instead of using
+// toLocaleDateString, so it looks the same on every phone.
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * A timestamp (milliseconds) as a day heading, in the phone's time zone:
+ * → "Sunday, 28 Sep"
+ */
+export function formatDay(ms) {
+  const d = new Date(ms);
+  return `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`;
+}
+
+/**
+ * A timestamp (milliseconds) as a short date: → "28 Sep"
+ */
+export function formatShortDate(ms) {
+  const d = new Date(ms);
+  return `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+}
+
+/**
+ * Group a list (already sorted, e.g. newest first) into one section per day,
+ * using each item's created_at. Keeps the order it was given.
+ *
+ * → [{ title: 'Sunday, 28 Sep', data: [...] }, { title: 'Saturday, 27 Sep', ... }]
+ *
+ * This is the shape React Native's SectionList expects.
+ */
+export function groupByDay(items) {
+  const sections = [];
+  let lastKey = null;
+  for (const item of items) {
+    const d = new Date(item.created_at);
+    // Same calendar day (in the phone's time zone) = same section.
+    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    if (key !== lastKey) {
+      sections.push({ title: formatDay(item.created_at), data: [] });
+      lastKey = key;
+    }
+    sections[sections.length - 1].data.push(item);
+  }
+  return sections;
+}
+
+/**
+ * The second line of an expense row:
+ *   ['Hammal'], 4 people        → "Hammal paid, for 4"
+ *   ['Naveed'], ['Zarak'] only  → "Naveed paid, for Zarak"
+ *   ['A', 'B'], 3 people        → "A & B paid, for 3"
+ */
+export function describeExpense(payerNames, participantNames) {
+  const forWhom = participantNames.length === 1 ? participantNames[0] : participantNames.length;
+  return `${joinNames(payerNames)} paid, for ${forWhom}`;
+}
+
+/**
+ * The line under a group's name: → "4 friends, Rs 8,500 spent"
+ */
+export function describeGroup(memberCount, totalSpent) {
+  const friends = memberCount === 1 ? 'friend' : 'friends';
+  return `${memberCount} ${friends}, ${formatRupees(totalSpent)} spent`;
 }

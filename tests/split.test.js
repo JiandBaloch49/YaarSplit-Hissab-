@@ -8,7 +8,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { splitAmount, prepareExpense, computeBalances, settleUp } from '../src/logic/split.js';
+import {
+  splitAmount,
+  prepareExpense,
+  computeBalances,
+  settleUp,
+  summarizeGroup,
+} from '../src/logic/split.js';
 
 const members = ['A', 'B', 'C', 'D'].map((id) => ({ id, name: id }));
 
@@ -304,4 +310,22 @@ test('editing: a custom split keeps the newly typed shares', () => {
     { member_id: 'A', share: 600 },
     { member_id: 'B', share: 600 },
   ]);
+});
+
+// --- Group summary (Groups list) ---
+
+test('summarizeGroup: three meals', () => {
+  // A +200, B +400 are owed → 600 still has to change hands.
+  const summary = summarizeGroup(members, threeMeals(), []);
+  assert.deepEqual(summary, { memberCount: 4, totalSpent: 1700, toSettle: 600 });
+});
+
+test('summarizeGroup: payments reduce toSettle but not totalSpent', () => {
+  const payments = [
+    { fromId: 'D', toId: 'B', amount: 350 },
+    { fromId: 'C', toId: 'A', amount: 200 },
+    { fromId: 'C', toId: 'B', amount: 50 },
+  ];
+  const summary = summarizeGroup(members, threeMeals(), payments);
+  assert.deepEqual(summary, { memberCount: 4, totalSpent: 1700, toSettle: 0 });
 });

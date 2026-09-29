@@ -4,8 +4,12 @@
 // expense row opens it pre-filled (header says "Edit expense", see App.js),
 // with a "Delete expense" button at the bottom.
 //
+// Layout follows the design: a big centred amount, category and "Paid by"
+// as chips, and "For whom" as a checklist that shows each person's share
+// live as you type (unticked people show "Didn't join").
+//
 // The simple case needs no extra taps: equal split, one payer, everyone
-// ticked. "More options" unlocks:
+// ticked. "Custom split or several payers" unlocks:
 //   - Custom split: type each person's exact share
 //   - Several payers: type how much each person paid
 //
@@ -18,13 +22,15 @@
 //   expenseId  only when editing: which expense to load
 
 import { useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AmountInput from '../components/AmountInput';
 import AppButton from '../components/AppButton';
 import CheckRow from '../components/CheckRow';
 import Chip from '../components/Chip';
 import ErrorList from '../components/ErrorList';
-import { colors, radius, space } from '../components/theme';
+import { ChevronDown, ChevronUp } from '../components/icons';
+import { colors, fonts, money, radius, text } from '../theme';
 import {
   addExpense,
   deleteExpense,
@@ -33,8 +39,8 @@ import {
   listMembersByIds,
   updateExpense,
 } from '../db/queries';
-import { CATEGORIES } from '../logic/split';
-import { categoryLabel, formatRupees, parseRupees } from '../logic/format';
+import { CATEGORIES, splitAmount } from '../logic/split';
+import { categoryLabel, formatRupees, formatTypedAmount, parseRupees } from '../logic/format';
 
 // Add up typed amounts for the "so far" hints, ignoring anything that isn't
 // a whole number yet (e.g. an empty box while the user is still typing).
@@ -132,6 +138,7 @@ function loadForm(groupId, expenseId) {
 export default function AddExpenseScreen({ route, navigation }) {
   const { groupId, expenseId } = route.params;
   const editing = Boolean(expenseId);
+  const insets = useSafeAreaInsets(); // space taken by the phone's home bar
 
   // Read once when the screen opens. Members can't change while this form is
   // open, and reloading on focus would wipe what the user has picked.
@@ -163,6 +170,32 @@ export default function AddExpenseScreen({ route, navigation }) {
   // Show the total in hints only once it's a real whole number.
   const totalLabel = Number.isInteger(amount) ? formatRupees(amount) : '?';
 
+  // --- Live shares for the "For whom" checklist ---
+  // Ticked people in member order — the same list and order buildInput()
+  // gives prepareExpense(), so the preview matches what will be saved
+  // (including who gets the leftover rupee).
+  const tickedIds = members.filter((m) => forIds.includes(m.id)).map((m) => m.id);
+  const amountOk = Number.isInteger(amount) && amount > 0;
+  // { memberId: share } for an equal split; empty until there's a valid
+  // amount and at least one person ticked.
+  const equalShares =
+    amountOk && tickedIds.length > 0 ? splitAmount(amount, tickedIds) : {};
+
+  // The small text next to "For whom":
+  //   equal, even split    → "Rs 400 each"
+  //   equal, uneven split  → "Rs 333–Rs 334 each" (some get one extra rupee)
+  //   custom split         → "Rs 700 of Rs 1,000"
+  let forWhomHint = '';
+  if (splitType === 'custom') {
+    forWhomHint = `${formatRupees(sumTyped(tickedIds.map((id) => shares[id])))} of ${totalLabel}`;
+  } else if (tickedIds.length > 0 && amountOk) {
+    const values = Object.values(equalShares);
+    const low = Math.min(...values);
+    const high = Math.max(...values);
+    forWhomHint =
+      low === high ? `${formatRupees(low)} each` : `${formatRupees(low)}–${formatRupees(high)} each`;
+  }
+
   function toggleFor(memberId) {
     setForIds((ids) =>
       ids.includes(memberId) ? ids.filter((id) => id !== memberId) : [...ids, memberId]
@@ -191,8 +224,8 @@ export default function AddExpenseScreen({ route, navigation }) {
         if (splitType === 'custom') {
           // An empty share box counts as 0, so prepareExpense can say
           // "Remove Bilal or give them a share." instead of a vaguer message.
-          const text = (shares[m.id] || '').trim();
-          participant.share = text === '' ? 0 : parseRupees(text);
+          const typed = (shares[m.id] || '').trim();
+          participant.share = typed === '' ? 0 : parseRupees(typed);
         }
         return participant;
       });
@@ -232,6 +265,7 @@ export default function AddExpenseScreen({ route, navigation }) {
     ]);
   }
 
+
   if (form.notFound) {
     return (
       <View style={styles.centered}>
@@ -251,21 +285,37 @@ export default function AddExpenseScreen({ route, navigation }) {
   return (
     <ScrollView
       style={styles.screen}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[styles.content, { paddingBottom: 32 + insets.bottom }]}
       keyboardShouldPersistTaps="handled" // taps on chips work while typing
       automaticallyAdjustKeyboardInsets // iOS: keep inputs above the keyboard
     >
-      <Text style={styles.label}>Title</Text>
+      {/* --- The big amount --- */}
+      <Text style={styles.amountLabel}>Amount</Text>
+      <View style={styles.amountRow}>
+        <Text style={styles.amountRs}>Rs</Text>
+        <TextInput
+          style={styles.amountInput}
+          // Shown with commas ("1,200"), stored without them ("1200").
+          value={formatTypedAmount(amountText)}
+          onChangeText={(typed) => setAmountText(typed.replace(/,/g, ''))}
+          placeholder="0"
+          placeholderTextColor={colors.line}
+          keyboardType="number-pad"
+          inputMode="numeric"
+          maxLength={11} // 9 digits + 2 commas
+          autoFocus={!editing} // a new expense starts with the amount
+          accessibilityLabel="Amount in rupees"
+        />
+      </View>
+
+      <Text style={styles.label}>What was it for?</Text>
       <TextInput
         style={styles.input}
         value={title}
         onChangeText={setTitle}
-        placeholder="e.g. Dinner at Monal"
-        placeholderTextColor={colors.grey}
+        placeholder="e.g. Lunch at Wadh"
+        placeholderTextColor={colors.muted}
       />
-
-      <Text style={styles.label}>Amount (Rs)</Text>
-      <AmountInput value={amountText} onChangeText={setAmountText} />
 
       <Text style={styles.label}>Category</Text>
       <View style={styles.chips}>
@@ -279,17 +329,91 @@ export default function AddExpenseScreen({ route, navigation }) {
         ))}
       </View>
 
-      {/* More options: custom split and several payers. Placed above
-          "Paid by" and "For whom" because it changes how those look. */}
-      <AppButton
-        title={showMore ? 'Hide options' : 'More options'}
-        variant="secondary"
-        small
+      {/* --- Paid by: one person (blue chips), or several people with amounts --- */}
+      <Text style={styles.label}>Paid by</Text>
+      {severalPayers ? (
+        <View>
+          {members.map((m, index) => (
+            <View key={m.id} style={[styles.listRow, index > 0 && styles.listDivider]}>
+              <Text style={styles.listName} numberOfLines={1}>
+                {m.name}
+              </Text>
+              <AmountInput
+                value={payerAmounts[m.id] || ''}
+                onChangeText={(typed) => setPayerAmounts((prev) => ({ ...prev, [m.id]: typed }))}
+              />
+            </View>
+          ))}
+          <Text style={styles.hint}>
+            Paid so far: {formatRupees(sumTyped(Object.values(payerAmounts)))} of {totalLabel}
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.chips}>
+          {members.map((m) => (
+            <Chip
+              key={m.id}
+              label={m.name}
+              tone="gets"
+              selected={paidBy === m.id}
+              onPress={() => setPaidBy(m.id)}
+            />
+          ))}
+        </View>
+      )}
+
+      {/* --- For whom: a checklist showing each person's share as you type --- */}
+      <View style={styles.forWhomHeader}>
+        <Text style={[styles.label, styles.labelInRow]}>For whom</Text>
+        <Text style={styles.hint}>{forWhomHint}</Text>
+      </View>
+      <View>
+        {members.map((m, index) => {
+          const checked = forIds.includes(m.id);
+          // Right side for a ticked person: their live equal share, or a box
+          // to type their custom share. (Unticked shows "Didn't join".)
+          const right =
+            splitType === 'custom' ? (
+              <AmountInput
+                value={shares[m.id] || ''}
+                onChangeText={(typed) => setShares((prev) => ({ ...prev, [m.id]: typed }))}
+              />
+            ) : (
+              <Text style={styles.share}>
+                {m.id in equalShares ? formatRupees(equalShares[m.id]) : '—'}
+              </Text>
+            );
+          return (
+            <View key={m.id} style={index > 0 && styles.listDivider}>
+              <CheckRow
+                label={m.name}
+                checked={checked}
+                onToggle={() => toggleFor(m.id)}
+                right={right}
+              />
+            </View>
+          );
+        })}
+      </View>
+
+      {/* --- Custom split and several payers, tucked away until needed --- */}
+      <Pressable
         onPress={() => setShowMore(!showMore)}
-      />
+        accessibilityRole="button"
+        accessibilityState={{ expanded: showMore }}
+        style={styles.moreLink}
+        hitSlop={8}
+      >
+        <Text style={styles.moreLinkText}>Custom split or several payers</Text>
+        {showMore ? (
+          <ChevronUp size={18} color={colors.gets} strokeWidth={2.25} />
+        ) : (
+          <ChevronDown size={18} color={colors.gets} strokeWidth={2.25} />
+        )}
+      </Pressable>
       {showMore && (
         <View style={styles.optionsBox}>
-          <Text style={styles.label}>Split</Text>
+          <Text style={[styles.label, styles.labelInBox]}>Split</Text>
           <View style={styles.chips}>
             <Chip label="Equally" selected={splitType === 'equal'} onPress={() => setSplitType('equal')} />
             <Chip label="Custom amounts" selected={splitType === 'custom'} onPress={() => setSplitType('custom')} />
@@ -303,63 +427,9 @@ export default function AddExpenseScreen({ route, navigation }) {
         </View>
       )}
 
-      {/* Paid by: one person (chips), or several people with amounts. */}
-      <Text style={styles.label}>Paid by</Text>
-      {severalPayers ? (
-        <>
-          {members.map((m) => (
-            <View key={m.id} style={styles.amountRow}>
-              <Text style={styles.rowName}>{m.name}</Text>
-              <AmountInput
-                compact
-                value={payerAmounts[m.id] || ''}
-                onChangeText={(text) => setPayerAmounts((prev) => ({ ...prev, [m.id]: text }))}
-              />
-            </View>
-          ))}
-          <Text style={styles.muted}>
-            Paid so far: {formatRupees(sumTyped(Object.values(payerAmounts)))} of {totalLabel}
-          </Text>
-        </>
-      ) : (
-        <View style={styles.chips}>
-          {members.map((m) => (
-            <Chip
-              key={m.id}
-              label={m.name}
-              selected={paidBy === m.id}
-              onPress={() => setPaidBy(m.id)}
-            />
-          ))}
-        </View>
-      )}
-
-      {/* For whom: tick who ate. With a custom split, each ticked person
-          also gets a box for their exact share. */}
-      <Text style={styles.label}>For whom</Text>
-      {members.map((m) => {
-        const checked = forIds.includes(m.id);
-        return (
-          <CheckRow key={m.id} label={m.name} checked={checked} onToggle={() => toggleFor(m.id)}>
-            {splitType === 'custom' && checked && (
-              <AmountInput
-                compact
-                value={shares[m.id] || ''}
-                onChangeText={(text) => setShares((prev) => ({ ...prev, [m.id]: text }))}
-              />
-            )}
-          </CheckRow>
-        );
-      })}
-      {splitType === 'custom' && (
-        <Text style={styles.muted}>
-          Shares so far: {formatRupees(sumTyped(forIds.map((id) => shares[id])))} of {totalLabel}
-        </Text>
-      )}
-
       <View style={styles.saveArea}>
         <ErrorList errors={errors} />
-        <AppButton title="Save" onPress={handleSave} />
+        <AppButton title="Save expense" onPress={handleSave} />
         {editing && <AppButton title="Delete expense" variant="danger" onPress={handleDelete} />}
       </View>
     </ScrollView>
@@ -369,69 +439,139 @@ export default function AddExpenseScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: colors.surface,
   },
   content: {
-    padding: space.lg,
-    paddingBottom: space.xl * 2,
-    gap: space.sm,
+    paddingHorizontal: 20,
+    paddingTop: 8,
   },
   centered: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.background,
-    padding: space.xl,
+    backgroundColor: colors.surface,
+    padding: 24,
   },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
+  muted: {
+    ...text.small,
+    fontSize: 16,
+  },
+
+  // Big amount
+  amountLabel: {
+    ...text.small,
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  amountRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 2,
+  },
+  amountRs: {
+    fontFamily: fonts.display,
+    fontSize: 26,
     color: colors.muted,
-    marginTop: space.md,
+  },
+  amountInput: {
+    fontFamily: fonts.display,
+    fontSize: 60,
+    color: colors.ink,
+    minWidth: 60,
+    padding: 0, // Android adds padding to inputs by default
+    ...money,
+  },
+
+  // Labels and inputs
+  label: {
+    ...text.label,
+    marginTop: 22,
+    marginBottom: 10,
+  },
+  labelInRow: {
+    marginTop: 0,
+    marginBottom: 0,
+  },
+  labelInBox: {
+    marginTop: 0,
   },
   input: {
-    backgroundColor: colors.card,
+    minHeight: 54,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius,
-    padding: space.md,
-    fontSize: 16,
-    color: colors.text,
+    borderColor: colors.line,
+    borderRadius: radius.input,
+    paddingHorizontal: 16,
+    fontFamily: fonts.regular,
+    fontSize: 17,
+    color: colors.ink,
   },
   chips: {
     flexDirection: 'row',
     flexWrap: 'wrap', // chips move onto a new line on narrow phones
-    gap: space.sm,
+    gap: 8,
   },
-  amountRow: {
+  hint: {
+    ...text.small,
+    fontSize: 15,
+    ...money,
+  },
+
+  // Lists (For whom, several payers)
+  forWhomHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginTop: 22,
+    marginBottom: 2,
+  },
+  listRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius,
-    padding: space.sm,
-    paddingLeft: space.md,
+    gap: 12,
+    minHeight: 54,
+    paddingVertical: 6,
   },
-  rowName: {
+  listDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth * 2,
+    borderTopColor: colors.line,
+  },
+  listName: {
+    ...text.body,
+    fontSize: 17,
+    flexShrink: 1,
+  },
+  share: {
+    fontFamily: fonts.semibold,
+    fontSize: 17,
+    color: colors.ink,
+    ...money,
+  },
+
+  // Custom split or several payers
+  moreLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    marginTop: 20,
+  },
+  moreLinkText: {
+    fontFamily: fonts.semibold,
     fontSize: 16,
-    color: colors.text,
-  },
-  muted: {
-    fontSize: 14,
-    color: colors.muted,
+    color: colors.gets,
   },
   optionsBox: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius,
-    padding: space.md,
-    paddingTop: 0,
-    gap: space.sm,
+    marginTop: 14,
+    padding: 16,
+    borderRadius: radius.input,
+    backgroundColor: colors.fog,
   },
+
   saveArea: {
-    marginTop: space.lg,
-    gap: space.md,
+    marginTop: 28,
+    gap: 12,
   },
 });

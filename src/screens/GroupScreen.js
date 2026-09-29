@@ -3,19 +3,25 @@
 // This screen loads the group's data and does the saving; the three tabs
 // (in src/components) only display it and report taps back here.
 //
+// It draws its own header (back arrow, group name, "4 friends, Rs 8,500
+// spent") instead of the standard one, to match the design. The tabs are a
+// segmented control underneath.
+//
 // Route params (set by GroupsScreen):
 //   groupId     which group to show
-//   name        the group's name (shown in the header, see App.js)
+//   name        the group's name, shown at the top
 //   initialTab  optional: 'expenses' (default), 'balances' or 'members'
 
 import { useCallback, useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import Chip from '../components/Chip';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import SegmentedControl from '../components/SegmentedControl';
 import ExpensesTab from '../components/ExpensesTab';
 import BalancesTab from '../components/BalancesTab';
 import MembersTab from '../components/MembersTab';
-import { colors, space } from '../components/theme';
+import { ChevronLeft } from '../components/icons';
+import { colors, text } from '../theme';
 import {
   addMember,
   addPayment,
@@ -25,8 +31,8 @@ import {
   listMembers,
   listPayments,
 } from '../db/queries';
-import { computeBalances, settleUp } from '../logic/split';
-import { formatRupees } from '../logic/format';
+import { computeBalances, settleUp, summarizeGroup } from '../logic/split';
+import { describeGroup, formatRupees } from '../logic/format';
 
 const TABS = [
   { key: 'expenses', label: 'Expenses' },
@@ -35,7 +41,8 @@ const TABS = [
 ];
 
 export default function GroupScreen({ route, navigation }) {
-  const { groupId, initialTab } = route.params;
+  const { groupId, name, initialTab } = route.params;
+  const insets = useSafeAreaInsets(); // space taken by the notch / status bar
 
   const [tab, setTab] = useState(initialTab || 'expenses');
   const [members, setMembers] = useState([]);
@@ -57,6 +64,7 @@ export default function GroupScreen({ route, navigation }) {
   // This is cheap for a friend group, and means it can never get out of date.
   const balances = computeBalances(members, expenses, payments);
   const transfers = settleUp(balances);
+  const { memberCount, totalSpent } = summarizeGroup(members, expenses, payments);
 
   // { [memberId]: name } so the tabs can show names instead of ids.
   const names = {};
@@ -131,10 +139,29 @@ export default function GroupScreen({ route, navigation }) {
 
   return (
     <View style={styles.screen}>
+      {/* --- Header: back arrow, group name, and a one-line summary --- */}
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <Pressable
+          onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          hitSlop={12}
+          style={styles.back}
+        >
+          <ChevronLeft size={28} color={colors.ink} strokeWidth={2.25} />
+        </Pressable>
+        <View style={styles.headerText}>
+          <Text style={styles.title} numberOfLines={1}>
+            {name}
+          </Text>
+          <Text style={styles.subtitle} numberOfLines={1}>
+            {describeGroup(memberCount, totalSpent)}
+          </Text>
+        </View>
+      </View>
+
       <View style={styles.tabs}>
-        {TABS.map((t) => (
-          <Chip key={t.key} label={t.label} selected={tab === t.key} onPress={() => setTab(t.key)} />
-        ))}
+        <SegmentedControl options={TABS} value={tab} onChange={setTab} />
       </View>
 
       {tab === 'expenses' && (
@@ -175,12 +202,29 @@ export default function GroupScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: colors.fog,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+  },
+  back: {
+    padding: 4,
+  },
+  headerText: {
+    flex: 1,
+  },
+  title: {
+    ...text.title,
+  },
+  subtitle: {
+    ...text.small,
+    fontSize: 15,
   },
   tabs: {
-    flexDirection: 'row',
-    gap: space.sm,
-    paddingHorizontal: space.lg,
-    paddingTop: space.md,
+    paddingHorizontal: 16,
   },
 });

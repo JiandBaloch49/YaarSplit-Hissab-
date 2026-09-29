@@ -1,48 +1,75 @@
 // ExpensesTab.js — the "Expenses" tab on the group screen.
 //
-// Shows the group's expenses (already sorted newest first by listExpenses)
-// and an "Add expense" button. Tapping a row opens it for editing. It only
-// displays what it's given — loading and saving happen elsewhere.
+// Expenses are grouped by day ("Sunday, 28 Sep"), newest first. Each day is
+// one white card; each row shows the category icon, the title, "Hammal
+// paid, for 4", and the amount. Tapping a row opens it for editing.
+// A floating "Add expense" button sits in the bottom-right corner.
+//
+// It only displays what it's given — loading and saving happen elsewhere.
 //
 // Props:
-//   expenses       from listExpenses()
-//   names          { [memberId]: name } for showing who paid
+//   expenses       from listExpenses() (newest first)
+//   names          { [memberId]: name }
 //   canAdd         false when the group has no members yet
 //   onAddExpense   called when "Add expense" is tapped
 //   onOpenExpense  called with the expense when its row is tapped
 
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AppButton from './AppButton';
-import { categoryLabel, formatRupees, joinNames } from '../logic/format';
-import { colors, radius, space } from './theme';
+import { CategoryTile } from './IconTile';
+import { Plus } from './icons';
+import { categoryLabel, describeExpense, formatRupees, groupByDay } from '../logic/format';
+import { colors, fonts, money, radius, text } from '../theme';
 
 export default function ExpensesTab({ expenses, names, canAdd, onAddExpense, onOpenExpense }) {
+  const insets = useSafeAreaInsets(); // space taken by the phone's home bar
+
   return (
-    <FlatList
-      data={expenses}
-      keyExtractor={(expense) => expense.id}
-      contentContainerStyle={styles.list}
-      ListHeaderComponent={
-        <View style={styles.header}>
-          <AppButton title="Add expense" onPress={onAddExpense} disabled={!canAdd} />
-          {!canAdd && (
-            <Text style={styles.hint}>Add members first (Members tab).</Text>
-          )}
-        </View>
-      }
-      ListEmptyComponent={<Text style={styles.empty}>No expenses yet.</Text>}
-      renderItem={({ item }) => (
-        <ExpenseRow expense={item} names={names} onPress={() => onOpenExpense(item)} />
-      )}
-    />
+    <View style={styles.container}>
+      <SectionList
+        sections={groupByDay(expenses)}
+        keyExtractor={(expense) => expense.id}
+        // Room at the bottom so the floating button never hides the last row.
+        contentContainerStyle={[styles.list, { paddingBottom: 96 + insets.bottom }]}
+        stickySectionHeadersEnabled={false}
+        renderSectionHeader={({ section }) => <Text style={styles.day}>{section.title}</Text>}
+        renderItem={({ item, index, section }) => (
+          <ExpenseRow
+            expense={item}
+            names={names}
+            // Rows in a day are drawn as one card: round the top of the first
+            // row and the bottom of the last, and put a line between rows.
+            isFirst={index === 0}
+            isLast={index === section.data.length - 1}
+            onPress={() => onOpenExpense(item)}
+          />
+        )}
+        ListEmptyComponent={
+          <Text style={styles.empty}>
+            {canAdd ? 'No expenses yet.' : 'Add your friends in the Members tab first.'}
+          </Text>
+        }
+      />
+
+      <AppButton
+        title="Add expense"
+        icon={Plus}
+        onPress={onAddExpense}
+        disabled={!canAdd}
+        style={[styles.addButton, { bottom: 16 + insets.bottom }]}
+      />
+    </View>
   );
 }
 
-// One expense: title and amount on top; category, who paid, and how many
-// people it was for underneath. The whole row is tappable.
-function ExpenseRow({ expense, names, onPress }) {
-  const payerNames = expense.payers.map((p) => names[p.member_id] || 'Removed member');
-  const count = expense.participants.length;
+// One expense row: [icon]  Title / "Hammal paid, for 4"   Rs 3,000
+function ExpenseRow({ expense, names, isFirst, isLast, onPress }) {
+  const nameOf = (id) => names[id] || 'Removed member';
+  const summary = describeExpense(
+    expense.payers.map((p) => nameOf(p.member_id)),
+    expense.participants.map((p) => nameOf(p.member_id))
+  );
   const title = expense.description || categoryLabel(expense.category);
 
   return (
@@ -50,69 +77,105 @@ function ExpenseRow({ expense, names, onPress }) {
       onPress={onPress}
       accessibilityRole="button"
       accessibilityHint="Edit this expense"
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+      style={({ pressed }) => [
+        styles.row,
+        isFirst && styles.rowFirst,
+        isLast && styles.rowLast,
+        pressed && styles.rowPressed,
+      ]}
     >
-      <View style={styles.rowTop}>
-        <Text style={styles.title} numberOfLines={1}>
-          {title}
+      <CategoryTile category={expense.category} />
+      {/* The divider sits on the text part only, so it starts after the icon. */}
+      <View style={[styles.rowBody, !isFirst && styles.rowDivider]}>
+        <View style={styles.rowText}>
+          <Text style={styles.title} numberOfLines={1}>
+            {title}
+          </Text>
+          <Text style={styles.summary} numberOfLines={1}>
+            {summary}
+          </Text>
+        </View>
+        <Text style={styles.amount} numberOfLines={1}>
+          {formatRupees(expense.amount)}
         </Text>
-        <Text style={styles.amount}>{formatRupees(expense.amount)}</Text>
       </View>
-      <Text style={styles.details}>
-        {categoryLabel(expense.category)} · Paid by {joinNames(payerNames)} · For{' '}
-        {count} {count === 1 ? 'person' : 'people'}
-      </Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
   list: {
-    padding: space.lg,
-    gap: space.sm,
+    paddingHorizontal: 16,
   },
-  header: {
-    marginBottom: space.sm,
-    gap: space.sm,
-  },
-  hint: {
+  day: {
+    fontFamily: fonts.semibold,
+    fontSize: 15,
     color: colors.muted,
-    textAlign: 'center',
+    marginTop: 20,
+    marginBottom: 10,
+    marginLeft: 4,
   },
   empty: {
-    color: colors.muted,
+    ...text.small,
     textAlign: 'center',
-    marginTop: space.xl,
+    marginTop: 40,
   },
   row: {
-    backgroundColor: colors.card,
-    borderRadius: radius,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: space.md,
-    gap: space.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: colors.surface,
+    paddingLeft: 16,
+  },
+  rowFirst: {
+    borderTopLeftRadius: radius.card,
+    borderTopRightRadius: radius.card,
+    paddingTop: 4,
+  },
+  rowLast: {
+    borderBottomLeftRadius: radius.card,
+    borderBottomRightRadius: radius.card,
+    paddingBottom: 4,
   },
   rowPressed: {
-    opacity: 0.6,
+    backgroundColor: colors.fog,
   },
-  rowTop: {
+  rowBody: {
+    flex: 1,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: space.md,
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 16,
+    paddingRight: 16,
+  },
+  rowDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth * 2,
+    borderTopColor: colors.line,
+  },
+  rowText: {
+    flex: 1,
+    gap: 3,
   },
   title: {
-    flex: 1, // long titles get cut with "…" instead of pushing the amount off
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
+    ...text.bodyStrong,
+    fontSize: 17,
+  },
+  summary: {
+    ...text.small,
+    fontSize: 15,
   },
   amount: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
+    fontFamily: fonts.semibold,
+    fontSize: 17,
+    color: colors.ink,
+    ...money,
   },
-  details: {
-    fontSize: 14,
-    color: colors.muted,
+  addButton: {
+    position: 'absolute',
+    right: 16,
+    borderRadius: 28, // fully rounded ends on the 56-tall button
   },
 });

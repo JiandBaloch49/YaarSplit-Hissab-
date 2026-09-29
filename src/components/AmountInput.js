@@ -1,25 +1,24 @@
-// AmountInput.js — a text box for typing whole rupees.
+// AmountInput.js — a small text box for typing whole rupees inside a row
+// (custom split shares, and amounts when several people paid).
 //
 // Opens the phone's number pad (digits only, no decimal point), since money
 // in Hisaab is always whole rupees. The value stays as TEXT while typing;
 // screens turn it into a number with parseRupees() when saving.
+// (The big amount at the top of the expense form is its own input.)
 //
-// Props:
-//   value, onChangeText   the text, like a normal TextInput
-//   placeholder           hint text (default "0")
-//   compact               true for the small box inside a list row
+// Props: value, onChangeText, placeholder (default "0")
 
 import { StyleSheet, TextInput } from 'react-native';
-import { colors, radius, space } from './theme';
+import { colors, fonts, money, radius } from '../theme';
 
-export default function AmountInput({ value, onChangeText, placeholder = '0', compact }) {
+export default function AmountInput({ value, onChangeText, placeholder = '0' }) {
   return (
     <TextInput
-      style={[styles.input, compact && styles.compact]}
+      style={styles.input}
       value={value}
       onChangeText={onChangeText}
       placeholder={placeholder}
-      placeholderTextColor={colors.grey}
+      placeholderTextColor={colors.muted}
       keyboardType="number-pad"
       inputMode="numeric"
       maxLength={9} // up to 999,999,999 — plenty for a meal
@@ -29,18 +28,15 @@ export default function AmountInput({ value, onChangeText, placeholder = '0', co
 
 const styles = StyleSheet.create({
   input: {
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius,
-    padding: space.md,
-    fontSize: 18,
-    color: colors.text,
-  },
-  compact: {
-    width: 100,
-    paddingVertical: space.sm,
+    width: 104,
+    minHeight: 40,
+    paddingHorizontal: 12,
+    backgroundColor: colors.fog,
+    borderRadius: radius.input - 2,
+    fontFamily: fonts.semibold,
     fontSize: 16,
+    color: colors.ink,
     textAlign: 'right',
+    ...money,
   },
 });

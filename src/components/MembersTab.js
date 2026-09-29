@@ -1,8 +1,9 @@
 // MembersTab.js — the "Members" tab on the group screen.
 //
-// A box to add a friend by name, then the list of members, each with a
-// "Remove" button. Whether removing is allowed (balance must be 0) is
-// decided by deleteMember() in queries.js; GroupScreen shows its message.
+// A box to add a friend by name, then a card listing the members, each with
+// their balance and a "Remove" button. Whether removing is allowed (balance
+// must be 0) is decided by deleteMember() in queries.js; GroupScreen shows
+// its message.
 //
 // Props:
 //   members         live members of the group
@@ -11,12 +12,24 @@
 //   onRemoveMember  called with the member when "Remove" is tapped
 
 import { useState } from 'react';
-import { FlatList, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AppButton from './AppButton';
+import Card from './Card';
+import { LetterTile } from './IconTile';
+import { Plus } from './icons';
 import { describeBalance } from '../logic/format';
-import { colors, radius, space } from './theme';
+import { colors, fonts, radius, text } from '../theme';
+
+// Colour for the balance line under a name: blue gets, orange owes.
+function balanceColor(balance) {
+  if (balance > 0) return colors.gets;
+  if (balance < 0) return colors.owes;
+  return colors.muted;
+}
 
 export default function MembersTab({ members, balances, onAddMember, onRemoveMember }) {
+  const insets = useSafeAreaInsets();
   const [name, setName] = useState('');
   const trimmed = name.trim();
 
@@ -27,85 +40,99 @@ export default function MembersTab({ members, balances, onAddMember, onRemoveMem
   }
 
   return (
-    <FlatList
-      data={members}
-      keyExtractor={(member) => member.id}
-      contentContainerStyle={styles.list}
+    <ScrollView
+      contentContainerStyle={[styles.container, { paddingBottom: 24 + insets.bottom }]}
       keyboardShouldPersistTaps="handled" // so tapping "Add" works while typing
-      ListHeaderComponent={
-        <View style={styles.addRow}>
-          <TextInput
-            style={styles.input}
-            value={name}
-            onChangeText={setName}
-            placeholder="Friend's name"
-            placeholderTextColor={colors.grey}
-            returnKeyType="done"
-            onSubmitEditing={handleAdd}
-          />
-          <AppButton title="Add" onPress={handleAdd} disabled={trimmed === ''} />
-        </View>
-      }
-      ListEmptyComponent={<Text style={styles.empty}>No members yet. Add your friends above.</Text>}
-      renderItem={({ item }) => (
-        <View style={styles.row}>
-          <View style={styles.info}>
-            <Text style={styles.name}>{item.name}</Text>
-            <Text style={styles.balance}>{describeBalance(balances[item.id] || 0)}</Text>
-          </View>
-          <AppButton title="Remove" variant="danger" small onPress={() => onRemoveMember(item)} />
-        </View>
+    >
+      <View style={styles.addRow}>
+        <TextInput
+          style={styles.input}
+          value={name}
+          onChangeText={setName}
+          placeholder="Friend’s name"
+          placeholderTextColor={colors.muted}
+          returnKeyType="done"
+          onSubmitEditing={handleAdd}
+        />
+        <AppButton title="Add" icon={Plus} onPress={handleAdd} disabled={trimmed === ''} />
+      </View>
+
+      {members.length === 0 ? (
+        <Text style={styles.empty}>No members yet. Add your friends above.</Text>
+      ) : (
+        <Card inset={74}>
+          {members.map((member) => {
+            const balance = balances[member.id] || 0;
+            return (
+              <View key={member.id} style={styles.row}>
+                <LetterTile letter={member.name[0].toUpperCase()} />
+                <View style={styles.info}>
+                  <Text style={styles.name} numberOfLines={1}>
+                    {member.name}
+                  </Text>
+                  <Text style={[styles.balance, { color: balanceColor(balance) }]}>
+                    {describeBalance(balance)}
+                  </Text>
+                </View>
+                <AppButton
+                  title="Remove"
+                  variant="danger"
+                  small
+                  onPress={() => onRemoveMember(member)}
+                />
+              </View>
+            );
+          })}
+        </Card>
       )}
-    />
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  list: {
-    padding: space.lg,
-    gap: space.sm,
+  container: {
+    padding: 16,
+    paddingTop: 20,
+    gap: 16,
   },
   addRow: {
     flexDirection: 'row',
-    gap: space.sm,
-    marginBottom: space.sm,
+    gap: 10,
   },
   input: {
     flex: 1,
-    backgroundColor: colors.card,
+    minHeight: 56,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius,
-    paddingHorizontal: space.md,
-    fontSize: 16,
-    color: colors.text,
+    borderColor: colors.line,
+    borderRadius: radius.input,
+    paddingHorizontal: 16,
+    fontFamily: fonts.regular,
+    fontSize: 17,
+    color: colors.ink,
   },
   empty: {
-    color: colors.muted,
+    ...text.small,
     textAlign: 'center',
-    marginTop: space.xl,
+    marginTop: 24,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: space.md,
-    backgroundColor: colors.card,
-    borderRadius: radius,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: space.md,
+    gap: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
   info: {
     flex: 1,
     gap: 2,
   },
   name: {
-    fontSize: 16,
-    color: colors.text,
+    ...text.bodyStrong,
+    fontSize: 17,
   },
   balance: {
+    fontFamily: fonts.medium,
     fontSize: 14,
-    color: colors.muted,
   },
 });
