@@ -4,18 +4,18 @@
     "slug": "yaarsplit",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/yaarsplit-icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "icon": "./assets/yaarsplit-icon.png"
     },
     "android": {
       "package": "com.jiandbaloch.yaarsplit",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#17223B",
+        "foregroundImage": "./assets/yaarsplit-adaptive-foreground.png",
+        "backgroundImage": "./assets/yaarsplit-adaptive-background.png"
       }
     },
     "web": {
@@ -24,7 +24,15 @@
     "plugins": [
       "expo-sqlite",
       "expo-font",
-      "expo-splash-screen"
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/yaarsplit-logo.png",
+          "backgroundColor": "#FFFFFF",
+          "resizeMode": "contain",
+          "imageWidth": 200
+        }
+      ]
     ]
   }
 }

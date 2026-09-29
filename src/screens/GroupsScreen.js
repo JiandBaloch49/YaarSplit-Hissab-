@@ -1,6 +1,6 @@
 // GroupsScreen.js — the first screen: a list of all groups.
 //
-// Big "YaarSplit" title, then one card with a row per group:
+// The YaarSplit logo at the top, then one card with a row per group:
 //   [K]  Kund Malir trip                     Rs 2,950
 //        4 friends, Rs 8,500 spent           to settle
 // Tap a group to open it. "New group" (pinned to the bottom) asks for a name.
@@ -8,7 +8,7 @@
 // At the very end of the list: "Built with ♥ by Jiand Baloch".
 
 import { useCallback, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AppButton from '../components/AppButton';
@@ -80,7 +80,13 @@ export default function GroupsScreen({ navigation }) {
           { paddingTop: insets.top + 40, paddingBottom: insets.bottom + PINNED_BAR_HEIGHT + 12 },
         ]}
       >
-        <Text style={styles.title}>YaarSplit</Text>
+        {/* The app logo in place of a text title. The label lets screen readers
+            still announce the app name. */}
+        <Image
+          source={require('../../assets/yaarsplit-logo.png')}
+          style={styles.logo}
+          accessibilityLabel="YaarSplit"
+        />
         <Text style={styles.tagline}>Split every meal by who actually ate.</Text>
 
         {groups.length === 0 ? (
@@ -198,10 +204,14 @@ const styles = StyleSheet.create({
     flexGrow: 1, // fill the screen, so the credit line can sit at the bottom
     paddingHorizontal: 16,
   },
-  title: {
-    ...text.screenTitle,
-    fontSize: 40,
-    marginLeft: 8,
+  logo: {
+    // About 180px wide. aspectRatio matches the image file (552 x 323), so the
+    // height follows the width and the logo is never stretched.
+    width: 180,
+    aspectRatio: 552 / 323,
+    // The image has a thin see-through border (~5px at this size), so a small
+    // margin lines the drawing up with the tagline below.
+    marginLeft: 3,
   },
   tagline: {
     ...text.small,
