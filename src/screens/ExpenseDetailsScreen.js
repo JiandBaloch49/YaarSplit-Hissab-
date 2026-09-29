@@ -8,13 +8,13 @@
 //   For whom      Hammal  Rs 750, Bilal Rs 750, ...
 //   Didn't join   Naveed
 //
-// "Edit" opens the expense form pre-filled. "Delete" asks first, then
-// soft-deletes it and shows "Expense deleted. Undo" for 5 seconds.
+// "Edit" opens the expense form pre-filled. "Delete" soft-deletes it right
+// away and shows "Expense deleted. Undo" for 5 seconds.
 //
 // Route params: groupId, expenseId
 
 import { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AppButton from '../components/AppButton';
@@ -80,20 +80,13 @@ export default function ExpenseDetailsScreen({ route, navigation }) {
   const nameOf = (id) => names[id] || 'Removed member';
   const title = expense.description || categoryLabel(expense.category);
 
+  // Deletes straight away — no "Are you sure?". A mistake is fixed with the
+  // Undo bar instead, which is quicker than confirming every time.
   function handleDelete() {
-    Alert.alert('Delete this expense?', 'It will be taken out of everyone’s balances.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          deleteExpense(expenseId); // soft delete: deleted = 1, synced = 0
-          // The bar lives above all screens, so it stays after we go back.
-          showUndo('Expense deleted.', () => restoreExpense(expenseId));
-          navigation.goBack();
-        },
-      },
-    ]);
+    deleteExpense(expenseId); // soft delete: deleted = 1, synced = 0
+    // The bar lives above all screens, so it stays after we go back.
+    showUndo('Expense deleted.', () => restoreExpense(expenseId));
+    navigation.goBack();
   }
 
   return (

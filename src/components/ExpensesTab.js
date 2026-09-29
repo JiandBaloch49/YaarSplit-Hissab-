@@ -3,7 +3,8 @@
 // Expenses are grouped by day ("Sunday, 28 Sep"), newest first. Each day is
 // one white card; each row shows the category icon, the title, "Hammal
 // paid, for 4", the amount, and an arrow. Tapping a row opens its details.
-// A floating "Add expense" button sits in the bottom-right corner.
+// A floating "Add expense" button sits in the bottom-right corner; while the
+// undo bar is showing, it moves up above the bar so it's never covered.
 //
 // It only displays what it's given — loading and saving happen elsewhere.
 //
@@ -18,12 +19,16 @@ import { Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AppButton from './AppButton';
 import { CategoryTile } from './IconTile';
+import { UNDO_BAR_SPACE, useUndo } from './UndoBar';
 import { ChevronRight, Plus } from './icons';
 import { categoryLabel, describeExpense, formatRupees, groupByDay } from '../logic/format';
 import { colors, fonts, money, radius, text } from '../theme';
 
 export default function ExpensesTab({ expenses, names, canAdd, onAddExpense, onOpenExpense }) {
   const insets = useSafeAreaInsets(); // space taken by the phone's home bar
+  const { isShowing: undoShowing } = useUndo();
+  // Normally 16 above the home bar; lifted above the undo bar while it shows.
+  const buttonBottom = 16 + insets.bottom + (undoShowing ? UNDO_BAR_SPACE : 0);
 
   return (
     <View style={styles.container}>
@@ -31,7 +36,7 @@ export default function ExpensesTab({ expenses, names, canAdd, onAddExpense, onO
         sections={groupByDay(expenses)}
         keyExtractor={(expense) => expense.id}
         // Room at the bottom so the floating button never hides the last row.
-        contentContainerStyle={[styles.list, { paddingBottom: 96 + insets.bottom }]}
+        contentContainerStyle={[styles.list, { paddingBottom: buttonBottom + 80 }]}
         stickySectionHeadersEnabled={false}
         renderSectionHeader={({ section }) => <Text style={styles.day}>{section.title}</Text>}
         renderItem={({ item, index, section }) => (
@@ -57,7 +62,7 @@ export default function ExpensesTab({ expenses, names, canAdd, onAddExpense, onO
         icon={Plus}
         onPress={onAddExpense}
         disabled={!canAdd}
-        style={[styles.addButton, { bottom: 16 + insets.bottom }]}
+        style={[styles.addButton, { bottom: buttonBottom }]}
       />
     </View>
   );

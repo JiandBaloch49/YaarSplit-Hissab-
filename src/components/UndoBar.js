@@ -10,6 +10,8 @@
 //     row in the database).
 //   - Screens showing that data call useAfterUndo(reload), so they reload
 //     as soon as "Undo" is tapped (see GroupScreen).
+//   - Floating buttons use useUndo().isShowing and UNDO_BAR_SPACE to move up
+//     out of the bar's way while it's visible (see ExpensesTab).
 //
 // Only one bar at a time: a new delete replaces the old bar (the older
 // delete simply stays deleted).
@@ -20,6 +22,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts, radius } from '../theme';
 
 const SHOW_FOR_MS = 5000; // 5 seconds
+const BAR_HEIGHT = 56;
+
+// How far a floating button must move up to sit just above the bar
+// (the bar's height plus a 12px gap).
+export const UNDO_BAR_SPACE = BAR_HEIGHT + 12;
 
 const UndoContext = createContext(null);
 
@@ -62,7 +69,7 @@ export function UndoProvider({ children }) {
   }
 
   return (
-    <UndoContext.Provider value={{ showUndo, subscribe }}>
+    <UndoContext.Provider value={{ showUndo, subscribe, isShowing: current !== null }}>
       {children}
       {current && (
         <View
@@ -71,7 +78,7 @@ export function UndoProvider({ children }) {
           accessibilityLiveRegion="polite"
           accessibilityRole="alert"
         >
-          <Text style={styles.message} numberOfLines={2}>
+          <Text style={styles.message} numberOfLines={1}>
             {current.message}
           </Text>
           <Pressable onPress={handleUndo} accessibilityRole="button" hitSlop={12}>
@@ -83,7 +90,7 @@ export function UndoProvider({ children }) {
   );
 }
 
-// { showUndo(message, onUndo) }
+// { showUndo(message, onUndo), isShowing }
 export function useUndo() {
   return useContext(UndoContext);
 }
@@ -104,7 +111,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 16,
-    minHeight: 56,
+    height: BAR_HEIGHT, // fixed, so UNDO_BAR_SPACE is always right
     paddingHorizontal: 20,
     borderRadius: radius.button,
     backgroundColor: colors.ink,

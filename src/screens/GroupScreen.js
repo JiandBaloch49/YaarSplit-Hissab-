@@ -118,27 +118,13 @@ export default function GroupScreen({ route, navigation }) {
     ]);
   }
 
-  // Undo a payment (e.g. "Mark as paid" tapped by mistake). It's a soft
+  // Remove a payment (e.g. "Mark as paid" tapped by mistake). It's a soft
   // delete, so the balances simply go back to how they were before it.
+  // Deletes straight away — no "Are you sure?"; the Undo bar is the safety net.
   function handleDeletePayment(payment) {
-    const from = names[payment.fromId] || 'Removed member';
-    const to = names[payment.toId] || 'Removed member';
-    Alert.alert(
-      'Delete this payment?',
-      `${from} paid ${to} ${formatRupees(payment.amount)}. Balances will go back to before it.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            deletePayment(payment.id); // soft delete: deleted = 1
-            reload();
-            showUndo('Payment deleted.', () => restorePayment(payment.id));
-          },
-        },
-      ]
-    );
+    deletePayment(payment.id); // soft delete: deleted = 1
+    reload();
+    showUndo('Payment deleted.', () => restorePayment(payment.id));
   }
 
   function handleAddMember(name) {
