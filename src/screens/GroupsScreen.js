@@ -1,6 +1,6 @@
 // GroupsScreen.js — the first screen: a list of all groups.
 //
-// Big "Hisaab" title, then one card with a row per group:
+// Big "YaarSplit" title, then one card with a row per group:
 //   [K]  Kund Malir trip                     Rs 2,950
 //        4 friends, Rs 8,500 spent           to settle
 // Tap a group to open it. "New group" (pinned to the bottom) asks for a name.
@@ -80,7 +80,7 @@ export default function GroupsScreen({ navigation }) {
           { paddingTop: insets.top + 40, paddingBottom: insets.bottom + PINNED_BAR_HEIGHT + 12 },
         ]}
       >
-        <Text style={styles.title}>Hisaab</Text>
+        <Text style={styles.title}>YaarSplit</Text>
         <Text style={styles.tagline}>Split every meal by who actually ate.</Text>
 
         {groups.length === 0 ? (

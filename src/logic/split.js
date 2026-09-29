@@ -1,4 +1,4 @@
-// split.js — all the bill-splitting math for Hisaab.
+// split.js — all the bill-splitting math for YaarSplit.
 //
 // Every function here is PURE: it takes plain data in and returns plain data
 // out. No database, no UI, no side effects. That makes the math easy to read

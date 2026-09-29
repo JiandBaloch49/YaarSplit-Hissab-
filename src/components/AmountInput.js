@@ -2,7 +2,7 @@
 // (custom split shares, and amounts when several people paid).
 //
 // Opens the phone's number pad (digits only, no decimal point), since money
-// in Hisaab is always whole rupees. The value stays as TEXT while typing;
+// in YaarSplit is always whole rupees. The value stays as TEXT while typing;
 // screens turn it into a number with parseRupees() when saving.
 // (The big amount at the top of the expense form is its own input.)
 //

@@ -1,4 +1,4 @@
-# Hisaab
+# YaarSplit
 
 A bill-splitting app for a friend group. Friends eat meals together (breakfast,
 lunch, dinner), but not everyone is present at every meal. **Each expense is

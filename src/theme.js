@@ -55,7 +55,7 @@ export const money = {
 
 // Ready-made text styles. Use them with spread: { ...text.body, color: ... }
 export const text = {
-  // Big screen title, e.g. "Hisaab" on the first screen.
+  // Big screen title, e.g. "YaarSplit" on the first screen.
   screenTitle: { fontFamily: fonts.display, fontSize: 36, color: colors.ink },
   // Group name at the top of a group.
   title: { fontFamily: fonts.display, fontSize: 24, color: colors.ink },

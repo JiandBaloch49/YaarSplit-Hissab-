@@ -1,4 +1,4 @@
-// schema.js — the SQL that creates Hisaab's tables.
+// schema.js — the SQL that creates YaarSplit's tables.
 //
 // This file only holds SQL text; it doesn't open the database. database.js
 // runs these statements every time the app starts ("IF NOT EXISTS" makes that

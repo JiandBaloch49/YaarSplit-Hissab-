@@ -1,4 +1,4 @@
-// database.js — opens Hisaab's local SQLite database and creates the tables.
+// database.js — opens YaarSplit's local SQLite database and creates the tables.
 //
 // Everything is saved on the phone first (offline-first), so this database is
 // the app's source of truth. We use expo-sqlite's SYNC API: calls return
@@ -11,6 +11,10 @@ import * as SQLite from 'expo-sqlite';
 import { ADDED_COLUMNS, ALL_TABLES } from './schema';
 
 // The file name of the database on the phone.
+//
+// Still "hisaab.db" on purpose: the app used to be called Hisaab. Renaming
+// this file would make the app open a new, empty database and lose
+// everything already saved. Don't change it.
 const DATABASE_NAME = 'hisaab.db';
 
 // The single open connection, shared by the whole app. Opened on first use.
