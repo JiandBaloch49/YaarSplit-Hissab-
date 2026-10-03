@@ -15,8 +15,9 @@ server/
     index.js        starts the real server (connects to MongoDB, listens)
     app.js          all the endpoints
     models.js       the MongoDB collections
-    seq.js          hands out the increasing "seq" numbers
+    seq.js          hands out "seq" numbers and saves rows with them atomically
     auth.js         device tokens (making and checking them)
+    rateLimit.js    "max 10 tries a minute per IP" for /join and /claim
     validate.js     checks uploaded data before saving it
     logic/split.js  EXACT copy of the app's src/logic/split.js
   tests/            tests, run against an in-memory MongoDB
@@ -31,22 +32,47 @@ app's tables) plus `devices` and `counters`.
 - `_id` is the app's own UUID, so a row has the same id on every phone and
   on the server.
 - `seq` is a number the server gives each document every time it's saved.
-  It only goes up. A phone that has seen up to seq 120 asks for "changes
-  after 120".
+  Each group counts on its own (1, 2, 3, ...) and it only goes up. A phone
+  that has seen up to seq 120 asks for "changes after 120".
+- Seq numbers are handed out and the documents saved **in one MongoDB
+  transaction**, so a phone can never see seq 6 while seq 5 is still being
+  saved (and then skip 5 forever). `src/seq.js` explains this in detail.
+  Transactions need a replica set: Atlas always is one, and the tests start
+  an in-memory one.
 - `created_at`, `updated_at`, `deleted` work exactly as in the app. Nothing
   is ever really deleted.
 - `payers` / `participants` are real arrays here, not JSON text.
-- `devices` stores a **hash** of each phone's token, never the token itself.
+- `devices` stores a **hash** of each phone's token, never the token itself,
+  plus `already_claimed` (1 if that member already had a phone).
 
 ## Endpoints
 
 | Method | Path | Token? | What it does |
 |---|---|---|---|
 | GET | `/` | no | Health check → `{ ok: true }` |
-| POST | `/groups` | no | Upload a group from a phone → `{ invite_code: "YAR-1234", group_id }` |
+| POST | `/groups` | no | Upload a group from a phone → `{ invite_code: "YAR-K7QM-3XHP", group_id }` |
 | POST | `/join` | no | `{ invite_code }` → `{ group, members }` (live members, each with `claimed`) |
 | POST | `/claim` | no | `{ invite_code, member_id }` → `{ token, device_id, group_id, member_id }` |
-| GET | `/groups/:groupId/changes?since=N` | **yes** | Everything in the group saved after seq N → `{ group, members, expenses, payments, last_seq }` |
+| GET | `/groups/:groupId/changes?since=N&limit=M` | **yes** | Up to M documents (default 500, max 1000) saved after seq N → `{ group, members, expenses, payments, devices, last_seq, has_more }` |
+| POST | `/groups/:groupId/new-invite-code` | **yes** | Replace a leaked invite code → `{ invite_code }`. The old code stops working; phones that already joined are not affected. |
+
+**Invite codes** look like `YAR-K7QM-3XHP`: 8 characters from letters and
+digits, leaving out the easily confused `0 O 1 I L`. That's about 850 billion
+possible codes. People can type them in lower case, with spaces or without
+dashes.
+
+**Rate limiting:** `/join` and `/claim` each allow 10 requests per minute
+from one IP address; more get `429` with a `Retry-After` header (seconds).
+On Render the phone's real IP comes from the `X-Forwarded-For` header (the
+app trusts one proxy hop). If friends ever get "Too many tries" without
+trying much, the IP being seen is probably Render's, not theirs — check
+`trust proxy` in `app.js`.
+
+**Pulling changes:** `/changes` includes deleted rows (`deleted: 1`), so
+deletions reach every phone. Keep asking with `since=last_seq` while
+`has_more` is `true`. `devices` lists phones that claimed a member (never
+their token hashes); a device with `already_claimed: 1` is a second phone
+for the same person, so the app can show "A new phone joined as Bilal".
 
 A request that needs a token sends it as a header:
 
@@ -171,12 +197,11 @@ That URL is what the app will talk to in the next phase.
 
 ## Known limits (for later phases)
 
-- Invite codes have only 10,000 possibilities (`YAR-0000` to `YAR-9999`).
-  Anyone who guesses a live code can join that group. That's fine for a
-  friend group, but before sharing the app widely, add rate limiting to
-  `/join` and `/claim` or use longer codes.
+- The rate limit is kept in the server's memory. That's fine while there's
+  one server; it resets when Render restarts it.
 - There are no endpoints yet for sending changes made AFTER the first upload
-  (new expenses, edits, deletions). That's the sync phase. It will use `seq`
-  and the device token the same way `/changes` does.
+  (new expenses, edits, deletions). That's the sync phase. Every write must
+  go through `saveWithSeqs()` in `seq.js`, or the "never miss a row"
+  guarantee breaks.
 - A member can be claimed by more than one phone (new phone, reinstall),
   and old tokens keep working. There's no "log this phone out" yet.

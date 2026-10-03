@@ -4,18 +4,21 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { api, sampleGroup, startTestDb, stopTestDb, uploadAndClaim } from './helpers.js';
+import { createApp } from '../src/app.js';
 import { Device, Expense, Group, Member, Payment } from '../src/models.js';
+import { saveWithSeqs } from '../src/seq.js';
 import { hashToken } from '../src/auth.js';
 
 before(startTestDb);
 after(stopTestDb);
 
 describe('POST /groups', () => {
-  test('saves the group and returns an invite code like YAR-1234', async () => {
+  test('saves the group and returns an invite code like YAR-K7QM-3XHP', async () => {
     const { ids, body } = sampleGroup();
     const res = await api().post('/groups').send(body).expect(201);
 
-    assert.match(res.body.invite_code, /^YAR-\d{4}$/);
+    // 8 characters, none of the easily confused 0, O, 1, I, L.
+    assert.match(res.body.invite_code, /^YAR-[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$/);
     assert.equal(res.body.group_id, ids.group);
 
     // Stored under the app's own UUIDs.
@@ -38,15 +41,24 @@ describe('POST /groups', () => {
     assert.equal(new Set(seqs).size, seqs.length);
   });
 
-  test('a second upload gets higher seq numbers than the first', async () => {
-    const first = sampleGroup();
-    const second = sampleGroup();
-    await api().post('/groups').send(first.body).expect(201);
-    await api().post('/groups').send(second.body).expect(201);
+  test('each group counts its own seq numbers: 1, 2, 3, ...', async () => {
+    const { ids, body } = sampleGroup();
+    await api().post('/groups').send(body).expect(201);
 
-    const firstGroup = await Group.findById(first.ids.group).lean();
-    const secondGroup = await Group.findById(second.ids.group).lean();
-    assert.ok(secondGroup.seq > firstGroup.seq);
+    // 4 members + 2 expenses + 1 payment + the group = seq 1 to 8.
+    const group = await Group.findById(ids.group).lean();
+    const docs = [
+      group,
+      ...(await Member.find({ group_id: ids.group }).lean()),
+      ...(await Expense.find({ group_id: ids.group }).lean()),
+      ...(await Payment.find({ group_id: ids.group }).lean()),
+    ];
+    assert.deepEqual(
+      docs.map((d) => d.seq).sort((a, b) => a - b),
+      [1, 2, 3, 4, 5, 6, 7, 8]
+    );
+    // The group is saved last, so it gets the highest number.
+    assert.equal(group.seq, 8);
   });
 
   test('uploading the same group twice is refused', async () => {
@@ -134,8 +146,8 @@ describe('POST /join', () => {
     const { ids, body } = sampleGroup();
     const upload = await api().post('/groups').send(body).expect(201);
 
-    // Typed sloppily on purpose: lower case and spaces still work.
-    const code = ` ${upload.body.invite_code.toLowerCase()} `;
+    // Typed sloppily on purpose: lower case, spaces instead of dashes.
+    const code = ` ${upload.body.invite_code.toLowerCase().replaceAll('-', ' ')} `;
     const res = await api().post('/join').send({ invite_code: code }).expect(200);
 
     assert.equal(res.body.group.id, ids.group);
@@ -161,7 +173,9 @@ describe('POST /join', () => {
   });
 
   test('unknown invite code → 404', async () => {
-    await api().post('/join').send({ invite_code: 'YAR-XXXX' }).expect(404);
+    await api().post('/join').send({ invite_code: 'YAR-XXXX-XXXX' }).expect(404);
+    await api().post('/join').send({ invite_code: 'YAR-1234' }).expect(404); // old short style
+    await api().post('/join').send({ invite_code: { $ne: '' } }).expect(404); // not text
   });
 });
 
@@ -183,6 +197,41 @@ describe('POST /claim', () => {
       .send({ invite_code: inviteCode, member_id: ids.A })
       .expect(201);
     assert.notEqual(again.body.token, token);
+  });
+
+  test('records each claim, marking a second phone for the same member', async () => {
+    const { ids, inviteCode, token } = await uploadAndClaim(); // A's first phone
+    await api().post('/claim').send({ invite_code: inviteCode, member_id: ids.B }).expect(201);
+    await api().post('/claim').send({ invite_code: inviteCode, member_id: ids.A }).expect(201);
+
+    // Other phones see the claims in /changes, in order, so the app can say
+    // "A new phone joined as A".
+    const res = await api()
+      .get(`/groups/${ids.group}/changes`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    assert.deepEqual(
+      res.body.devices.map((d) => [d.member_id, d.already_claimed]),
+      [
+        [ids.A, 0], // A's first phone
+        [ids.B, 0], // B's first phone
+        [ids.A, 1], // A AGAIN: a new phone for someone who already had one
+      ]
+    );
+  });
+
+  test('two claims of the same member at once: only one is the "first"', async () => {
+    const { ids, body } = sampleGroup();
+    const upload = await api().post('/groups').send(body).expect(201);
+    const claim = () =>
+      api().post('/claim').send({ invite_code: upload.body.invite_code, member_id: ids.C });
+    await Promise.all([claim().expect(201), claim().expect(201), claim().expect(201)]);
+
+    const devices = await Device.find({ member_id: ids.C }).lean();
+    assert.deepEqual(
+      devices.map((d) => d.already_claimed).sort(),
+      [0, 1, 1]
+    );
   });
 
   test("can't claim a member of another group, or a deleted member", async () => {
@@ -238,10 +287,110 @@ describe('GET /groups/:groupId/changes (needs a token)', () => {
     assert.equal(res.body.expenses.length, 2);
     assert.equal(res.body.payments.length, 1);
     assert.equal(res.body.expenses[0].payers[0].member_id, ids.A);
+    assert.equal(res.body.has_more, false);
+
+    // The claim of A shows up as a device — without its token hash.
+    assert.equal(res.body.devices.length, 1);
+    assert.equal(res.body.devices[0].member_id, ids.A);
+    assert.equal(res.body.devices[0].token_hash, undefined);
 
     // last_seq is the biggest seq in the reply.
-    const all = [res.body.group, ...res.body.members, ...res.body.expenses, ...res.body.payments];
+    const all = [
+      res.body.group,
+      ...res.body.members,
+      ...res.body.expenses,
+      ...res.body.payments,
+      ...res.body.devices,
+    ];
     assert.equal(res.body.last_seq, Math.max(...all.map((d) => d.seq)));
+  });
+
+  test('soft-deleted rows (deleted: 1) are sent too, so phones learn about deletions', async () => {
+    const { ids, body } = sampleGroup(); // member D is already deleted
+    body.expenses[1].deleted = 1;
+    body.payments[0].deleted = 1;
+    const upload = await api().post('/groups').send(body).expect(201);
+    const claim = await api()
+      .post('/claim')
+      .send({ invite_code: upload.body.invite_code, member_id: ids.A })
+      .expect(201);
+
+    const res = await api()
+      .get(`/groups/${ids.group}/changes`)
+      .set('Authorization', `Bearer ${claim.body.token}`)
+      .expect(200);
+
+    const byId = (list, id) => list.find((row) => row.id === id);
+    assert.equal(byId(res.body.members, ids.D).deleted, 1);
+    assert.equal(byId(res.body.expenses, body.expenses[1].id).deleted, 1);
+    assert.equal(byId(res.body.payments, body.payments[0].id).deleted, 1);
+    // ...next to the live ones.
+    assert.equal(byId(res.body.members, ids.A).deleted, 0);
+    assert.equal(byId(res.body.expenses, body.expenses[0].id).deleted, 0);
+
+    // A row deleted LATER (deleted 0 → 1 with a new seq) shows up when
+    // pulling from the old last_seq.
+    // (Done the way the future sync endpoint will: through saveWithSeqs.)
+    const before = res.body.last_seq;
+    await saveWithSeqs(ids.group, 1, ([seq], session) =>
+      Expense.updateOne(
+        { _id: body.expenses[0].id },
+        { $set: { deleted: 1, updated_at: Date.now(), seq } },
+        { session }
+      )
+    );
+
+    const later = await api()
+      .get(`/groups/${ids.group}/changes?since=${before}`)
+      .set('Authorization', `Bearer ${claim.body.token}`)
+      .expect(200);
+    assert.deepEqual(
+      later.body.expenses.map((e) => [e.id, e.deleted]),
+      [[body.expenses[0].id, 1]]
+    );
+    assert.equal(later.body.last_seq, before + 1);
+  });
+
+  test('pages: ?limit=N returns N at a time, in seq order, with has_more', async () => {
+    const { ids, token } = await uploadAndClaim(); // 8 uploaded + 1 device = 9
+
+    const seen = [];
+    let since = 0;
+    let pages = 0;
+    for (;;) {
+      const res = await api()
+        .get(`/groups/${ids.group}/changes?since=${since}&limit=4`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      pages++;
+      const rows = [
+        ...(res.body.group ? [res.body.group] : []),
+        ...res.body.members,
+        ...res.body.expenses,
+        ...res.body.payments,
+        ...res.body.devices,
+      ];
+      assert.ok(rows.length <= 4);
+      seen.push(...rows.map((r) => r.seq));
+      since = res.body.last_seq;
+      if (!res.body.has_more) break;
+    }
+
+    assert.equal(pages, 3); // 4 + 4 + 1
+    assert.deepEqual(
+      seen.sort((a, b) => a - b),
+      [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    );
+  });
+
+  test('rejects a bad limit', async () => {
+    const { ids, token } = await uploadAndClaim();
+    for (const limit of ['0', '-1', 'abc', '1001']) {
+      await api()
+        .get(`/groups/${ids.group}/changes?limit=${limit}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(400);
+    }
   });
 
   test('since=<last_seq> returns nothing when nothing changed', async () => {
@@ -260,6 +409,77 @@ describe('GET /groups/:groupId/changes (needs a token)', () => {
     assert.equal(res.body.expenses.length, 0);
     assert.equal(res.body.payments.length, 0);
     assert.equal(res.body.last_seq, first.body.last_seq);
+  });
+});
+
+describe('rate limiting on /join and /claim', () => {
+  test('the 11th try in a minute from one IP gets 429', async () => {
+    const app = createApp(); // one app, so the counts carry across requests
+    for (let i = 0; i < 10; i++) {
+      await api(app).post('/join').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(404);
+    }
+    const res = await api(app).post('/join').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(429);
+    assert.match(res.body.error, /Too many tries/);
+    assert.ok(Number(res.headers['retry-after']) > 0);
+
+    // /claim counts separately, and has the same limit.
+    for (let i = 0; i < 10; i++) {
+      await api(app).post('/claim').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(404);
+    }
+    await api(app).post('/claim').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(429);
+  });
+
+  test('counts each IP separately (behind Render, from X-Forwarded-For)', async () => {
+    const app = createApp({ rateLimit: { max: 2, windowMs: 60000 } });
+    const join = (ip) =>
+      api(app).post('/join').set('X-Forwarded-For', ip).send({ invite_code: 'YAR-AAAA-AAAA' });
+    await join('1.1.1.1').expect(404);
+    await join('1.1.1.1').expect(404);
+    await join('1.1.1.1').expect(429);
+    await join('2.2.2.2').expect(404); // a different phone is not blocked
+  });
+
+  test('the limit resets after the window', async () => {
+    const app = createApp({ rateLimit: { max: 1, windowMs: 50 } });
+    await api(app).post('/join').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(404);
+    await api(app).post('/join').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(429);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await api(app).post('/join').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(404);
+  });
+});
+
+describe('POST /groups/:groupId/new-invite-code (needs a token)', () => {
+  test('replaces the code: the old one stops working, the new one works', async () => {
+    const { ids, inviteCode, token } = await uploadAndClaim();
+    const res = await api()
+      .post(`/groups/${ids.group}/new-invite-code`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    const newCode = res.body.invite_code;
+    assert.match(newCode, /^YAR-[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$/);
+    assert.notEqual(newCode, inviteCode);
+
+    await api().post('/join').send({ invite_code: inviteCode }).expect(404);
+    await api().post('/claim').send({ invite_code: inviteCode, member_id: ids.B }).expect(404);
+    const join = await api().post('/join').send({ invite_code: newCode }).expect(200);
+    assert.equal(join.body.group.id, ids.group);
+
+    // Phones that already joined keep working with their tokens.
+    await api()
+      .get(`/groups/${ids.group}/changes`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+  });
+
+  test('needs a token for THAT group', async () => {
+    const { ids } = await uploadAndClaim();
+    const { token: otherToken } = await uploadAndClaim();
+    await api().post(`/groups/${ids.group}/new-invite-code`).expect(401);
+    await api()
+      .post(`/groups/${ids.group}/new-invite-code`)
+      .set('Authorization', `Bearer ${otherToken}`)
+      .expect(403);
   });
 });
 

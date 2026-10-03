@@ -8,9 +8,10 @@
 //   _id         the app's UUID, made on the phone. The server never makes up
 //               its own ids for app data, so a row has the same id everywhere.
 //   seq         a number the SERVER gives the document every time it is
-//               saved. It only ever goes up, across all collections. A phone
-//               that has seen everything up to seq 120 asks "what changed
-//               after 120?" and gets exactly the new/changed documents.
+//               saved. Each group has its own count, which only ever goes
+//               up, across all collections. A phone that has seen everything
+//               in its group up to seq 120 asks "what changed after 120?"
+//               and gets exactly the new/changed documents. (See seq.js.)
 //   created_at  milliseconds (Date.now()), same as the app
 //   updated_at  milliseconds, same as the app
 //   deleted     0/1, same as the app. Nothing is ever really removed, so a
@@ -106,17 +107,24 @@ const paymentSchema = new Schema(
 // One phone that said "I am this member" (POST /claim).
 // We keep only a HASH of the device's secret token, never the token itself:
 // if the database ever leaked, the hashes couldn't be used to log in.
+// Devices get a seq like everything else, so /changes can tell the other
+// phones "A new phone joined as Bilal".
 const deviceSchema = new Schema(
   {
     ...baseFields,
     member_id: { type: String, required: true },
     group_id: { type: String, required: true, index: true },
     token_hash: { type: String, required: true, unique: true },
+    // 1 if this member ALREADY had a phone when this one claimed it. That's
+    // normal after a reinstall or a new phone, but it's also what it would
+    // look like if a stranger claimed someone — worth showing to the group.
+    already_claimed: { type: Number, required: true, default: 0, enum: [0, 1] },
   },
   options
 );
 
-// Holds the last seq number handed out. One document: { _id: 'seq', value }.
+// Holds the last seq number handed out in each group:
+// { _id: 'seq:<groupId>', value }. See seq.js.
 const counterSchema = new Schema(
   { _id: { type: String, required: true }, value: { type: Number, required: true } },
   options

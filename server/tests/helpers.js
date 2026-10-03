@@ -4,10 +4,14 @@
 // MongoDB that lives only in memory (mongodb-memory-server) and throws it
 // away at the end. Each test file runs in its own process, so each gets its
 // own empty database.
+//
+// It runs as a one-machine "replica set" rather than a plain server, because
+// the server saves with transactions (see src/seq.js) and MongoDB only allows
+// transactions on replica sets. Atlas is always one.
 
 import { randomUUID } from 'node:crypto';
 import mongoose from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
+import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 
@@ -17,7 +21,10 @@ let mongo;
 export async function startTestDb() {
   // Allow a slow first start (e.g. Windows virus scanning mongod the first
   // time). The default is 10 seconds.
-  mongo = await MongoMemoryServer.create({ instance: { launchTimeout: 60000 } });
+  mongo = await MongoMemoryReplSet.create({
+    replSet: { count: 1, storageEngine: 'wiredTiger' },
+    instanceOpts: [{ launchTimeout: 60000 }],
+  });
   await mongoose.connect(mongo.getUri());
   await mongoose.syncIndexes(); // same as index.js does on the real server
 }
@@ -28,9 +35,14 @@ export async function stopTestDb() {
   await mongo?.stop(); // mongo is unset if it never started
 }
 
-/** Supertest wrapper around the app: api().post('/groups').send(...) */
-export function api() {
-  return request(createApp());
+/**
+ * Supertest wrapper around a brand-new app: api().post('/groups').send(...)
+ * A new app per call also means fresh rate-limit counters, so tests that
+ * aren't about rate limiting never hit the limit. Pass an app made with
+ * createApp() to keep one across requests.
+ */
+export function api(app = createApp()) {
+  return request(app);
 }
 
 /**
