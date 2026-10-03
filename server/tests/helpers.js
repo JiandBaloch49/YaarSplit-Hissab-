@@ -36,7 +36,7 @@ export async function stopTestDb() {
 }
 
 /**
- * Supertest wrapper around a brand-new app: api().post('/groups').send(...)
+ * Supertest wrapper around a brand-new app: api().post('/accounts').send(...)
  * A new app per call also means fresh rate-limit counters, so tests that
  * aren't about rate limiting never hit the limit. Pass an app made with
  * createApp() to keep one across requests.
@@ -45,10 +45,28 @@ export function api(app = createApp()) {
   return request(app);
 }
 
+/** The header that proves who you are: .set(auth(token)) */
+export function auth(token) {
+  return { Authorization: `Bearer ${token}` };
+}
+
+// Usernames must be unique across the whole test file.
+let accountCount = 0;
+
+/**
+ * Make a new account. Returns { token, account: { id, name, username } }.
+ */
+export async function createAccount(name = 'Friend') {
+  accountCount++;
+  const username = `user${accountCount}_${randomUUID().slice(0, 6)}`;
+  const res = await api().post('/accounts').send({ name, username }).expect(201);
+  return { token: res.body.token, account: res.body.account };
+}
+
 /**
  * A valid upload body, shaped exactly like the phone would send it:
  * a trip with A, B, C (and D, who was removed), one equal-split expense,
- * one custom-split expense, and a payment.
+ * one custom-split expense, and a payment. The uploader is A.
  * Returns the body plus the ids, so tests can refer to people by letter.
  */
 export function sampleGroup() {
@@ -61,6 +79,7 @@ export function sampleGroup() {
   return {
     ids: { A: A.id, B: B.id, C: C.id, D: D.id, group: group.id },
     body: {
+      my_member_id: A.id,
       group,
       members: [A, B, C, D],
       expenses: [
@@ -108,13 +127,28 @@ export function sampleGroup() {
   };
 }
 
-/** Upload the sample group, join and claim member A. Returns everything. */
-export async function uploadAndClaim() {
+/**
+ * Make an account for A and upload the sample group with it, so A is the
+ * admin. Returns { ids, body, token } (token = A's).
+ */
+export async function uploadGroup() {
   const { ids, body } = sampleGroup();
-  const upload = await api().post('/groups').send(body).expect(201);
-  const claim = await api()
-    .post('/claim')
-    .send({ invite_code: upload.body.invite_code, member_id: ids.A })
+  const admin = await createAccount('A');
+  await api().post('/groups').set(auth(admin.token)).send(body).expect(201);
+  return { ids, body, token: admin.token, admin };
+}
+
+/**
+ * A new account joins the group as member `letter` ('B' or 'C'): the admin
+ * invites it by username and it accepts. Returns { token, account }.
+ */
+export async function joinAs(group, letter, adminToken = group.token) {
+  const friend = await createAccount(letter);
+  const invite = await api()
+    .post(`/groups/${group.ids.group}/invites`)
+    .set(auth(adminToken))
+    .send({ member_id: group.ids[letter], username: friend.account.username })
     .expect(201);
-  return { ids, body, inviteCode: upload.body.invite_code, token: claim.body.token };
+  await api().post(`/invites/${invite.body.invite.id}/accept`).set(auth(friend.token)).expect(200);
+  return friend;
 }

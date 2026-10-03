@@ -16,7 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { api, startTestDb, stopTestDb, uploadAndClaim } from './helpers.js';
+import { api, auth, startTestDb, stopTestDb, uploadGroup } from './helpers.js';
 import { Expense } from '../src/models.js';
 import { saveWithSeqs } from '../src/seq.js';
 
@@ -45,7 +45,7 @@ function expense(groupId, memberId) {
 }
 
 test('concurrent saves + paged pulls: the phone never misses a row', async () => {
-  const { ids, token } = await uploadAndClaim();
+  const { ids, token } = await uploadGroup();
 
   // A "phone" that pulls one page, and remembers everything it got.
   const seenIds = new Set();
@@ -54,10 +54,10 @@ test('concurrent saves + paged pulls: the phone never misses a row', async () =>
   async function pullPage() {
     const res = await api()
       .get(`/groups/${ids.group}/changes?since=${since}&limit=10`)
-      .set('Authorization', `Bearer ${token}`)
+      .set(auth(token))
       .expect(200);
-    const { group, members, expenses, payments, devices } = res.body;
-    for (const row of [...(group ? [group] : []), ...members, ...expenses, ...payments, ...devices]) {
+    const { group, members, expenses, payments } = res.body;
+    for (const row of [...(group ? [group] : []), ...members, ...expenses, ...payments]) {
       seenIds.add(row.id);
       seenSeqs.push(row.seq);
     }

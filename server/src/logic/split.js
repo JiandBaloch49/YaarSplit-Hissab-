@@ -17,9 +17,13 @@
 //     participants: [{ member_id, share }],    // who it was FOR, and their share
 //     from_fund,                               // 1 = paid from the group fund
 //   }
-//   payment = { fromId, toId, amount, type }   // fromId gave toId money
+//   payment = { fromId, toId, amount, type, status }  // fromId gave toId money
 //   balances = { [memberId]: rupees }  // + means they are owed money,
 //                                      // - means they owe money
+//
+// Payment status (see PAYMENT_STATUSES): only CONFIRMED payments move money
+// in balances, fund totals and debts. A pending payment is just "X says they
+// paid" until the receiver confirms it.
 //
 // Group fund: friends give cash to one member (the fund holder), who pays
 // expenses from it. This needs NO special balance maths:
@@ -48,6 +52,27 @@ export const SPLIT_TYPES = ['equal', 'custom'];
 //   contribution — putting money into the group fund (giver → holder)
 //   return       — the holder giving leftover fund money back (holder → member)
 export const PAYMENT_TYPES = ['settlement', 'contribution', 'return'];
+
+// Allowed values for payment.status.
+//   pending   — the payer recorded it; waiting for the receiver
+//   confirmed — the receiver (or an admin, if the receiver has no account)
+//               said "yes, I got it". Only these count.
+//   rejected  — the receiver said "I never got this"
+//   cancelled — the payer took it back before it was confirmed
+export const PAYMENT_STATUSES = ['pending', 'confirmed', 'rejected', 'cancelled'];
+
+/**
+ * Does this payment count as money that really changed hands?
+ * Only confirmed ones do.
+ *
+ * A payment with NO status at all also counts: those are rows saved on a
+ * phone before payments had a status (the app gets the column in phase 6b).
+ * The server always stores a status, so this never lets a pending payment
+ * through there.
+ */
+export function isConfirmed(payment) {
+  return (payment.status ?? 'confirmed') === 'confirmed';
+}
 
 // Helper: is this a whole number of rupees, 0 or more?
 function isRupees(value) {
@@ -243,6 +268,8 @@ export function splitAmount(amount, participantIds) {
  *   splitting happens here.
  * - For a payment from X to Y: X gets +amount (X paid off some debt), and
  *   Y gets -amount (Y received money, so is owed less).
+ *   Only CONFIRMED payments count (see isConfirmed); pending, rejected and
+ *   cancelled ones are skipped, so passing every payment is fine.
  *
  * The caller should pass only live rows (deleted = 0), with the payers and
  * participants JSON already parsed into arrays.
@@ -270,6 +297,7 @@ export function computeBalances(members, expenses, payments) {
   }
 
   for (const payment of payments) {
+    if (!isConfirmed(payment)) continue; // not real (yet)
     add(payment.fromId, payment.amount);
     add(payment.toId, -payment.amount);
   }
@@ -336,6 +364,154 @@ export function settleUp(balances) {
 }
 
 /**
+ * Who owes whom because of ONE expense, as [{ fromId, toId, amount }].
+ *
+ * We treat the expense as a tiny group of its own: payers +amount,
+ * participants -share, then settle it with settleUp(). With one payer (the
+ * usual case) that is simply "every other participant owes the payer their
+ * share". With several payers, settleUp decides who pays back which payer,
+ * always the same way, in whole rupees.
+ */
+function expenseDebts(expense) {
+  const net = {};
+  for (const payer of expense.payers) {
+    net[payer.member_id] = (net[payer.member_id] || 0) + payer.amount;
+  }
+  for (const participant of expense.participants) {
+    net[participant.member_id] = (net[participant.member_id] || 0) - participant.share;
+  }
+  return settleUp(net);
+}
+
+/**
+ * Pairwise debts: each person pays back exactly the people they owe, with
+ * no "simplifying". Used when a group turns simplify_debts off.
+ *
+ * Example: A paid 300 for A, B, C and B paid 300 for A, B, C.
+ *   settleUp (simplified)  → C pays A 100, C pays B 100
+ *   pairwiseDebts          → C pays A 100, C pays B 100 (A and B cancel out)
+ * But: A paid 200 for B, and B paid 200 for C.
+ *   settleUp (simplified)  → C pays A 200 (B is skipped entirely)
+ *   pairwiseDebts          → B pays A 200, C pays B 200
+ *
+ * How:
+ *   1. Every expense becomes debts between people (see expenseDebts).
+ *   2. A confirmed payment X → Y cancels that much of X's debt to Y. (If X
+ *      didn't owe Y that much, Y now owes X the difference.)
+ *   3. For each pair, debts in both directions cancel: if A owes B 300 and
+ *      B owes A 100, the answer is "A pays B 200".
+ *
+ * The total each person pays/receives is the same as in settleUp — only
+ * WHO pays WHOM differs — so either list settles everyone to exactly 0.
+ *
+ * Same inputs as computeBalances (live rows; any payment status is fine,
+ * only confirmed ones count).
+ * Returns [{ fromId, toId, amount }], sorted by fromId then toId.
+ */
+export function pairwiseDebts(expenses, payments) {
+  // net[lo][hi] = how much `lo` owes `hi`, where lo < hi (ids compared as
+  // text). A negative number means `hi` owes `lo`. Keeping each pair under
+  // one key is what makes the two directions cancel out.
+  const net = {};
+  function addDebt(fromId, toId, amount) {
+    if (fromId === toId) return; // owing yourself means nothing
+    const [lo, hi, sign] = fromId < toId ? [fromId, toId, 1] : [toId, fromId, -1];
+    net[lo] = net[lo] || {};
+    net[lo][hi] = (net[lo][hi] || 0) + sign * amount;
+  }
+
+  for (const expense of expenses) {
+    for (const debt of expenseDebts(expense)) addDebt(debt.fromId, debt.toId, debt.amount);
+  }
+  for (const payment of payments) {
+    if (!isConfirmed(payment)) continue;
+    // X paid Y: the same as Y now owing X that much, which cancels X's debt.
+    addDebt(payment.toId, payment.fromId, payment.amount);
+  }
+
+  const transfers = [];
+  for (const lo of Object.keys(net)) {
+    for (const hi of Object.keys(net[lo])) {
+      const value = net[lo][hi];
+      if (value > 0) transfers.push({ fromId: lo, toId: hi, amount: value });
+      if (value < 0) transfers.push({ fromId: hi, toId: lo, amount: -value });
+    }
+  }
+  transfers.sort((x, y) =>
+    x.fromId === y.fromId ? (x.toId < y.toId ? -1 : 1) : x.fromId < y.fromId ? -1 : 1
+  );
+  return transfers;
+}
+
+/**
+ * The history between two members: every expense and payment involving both
+ * of them, oldest first (by created_at), with what is still owed after each.
+ *
+ *   aId, bId   the two members
+ *   expenses   live expenses (any; the ones without both people are skipped)
+ *   payments   live payments, any status (only confirmed ones move money)
+ *
+ * Returns a list of steps:
+ *   {
+ *     kind,       'expense' or 'payment'
+ *     id, created_at,
+ *     item,       the expense or payment itself
+ *     change,     how much this step adds to what bId owes aId
+ *                 (negative = it reduces it, or makes aId owe bId)
+ *     remaining,  what bId owes aId AFTER this step
+ *                 (negative = aId owes bId that much; 0 = even)
+ *   }
+ *
+ * An expense counts as "involving both" when both appear in it as payer or
+ * participant — its change can still be 0 (e.g. both ate, someone else
+ * paid). Pending, rejected and cancelled payments between them are listed
+ * too, with change 0, so the history shows them.
+ *
+ * The amounts come from the same per-expense debts as pairwiseDebts, so the
+ * last `remaining` always matches the pairwise debt between the two.
+ */
+export function historyBetween(aId, bId, expenses, payments) {
+  const steps = [];
+
+  for (const expense of expenses) {
+    const ids = [...expense.payers, ...expense.participants].map((p) => p.member_id);
+    if (!ids.includes(aId) || !ids.includes(bId)) continue;
+
+    // Of everything this expense creates, only debts between a and b matter.
+    let change = 0;
+    for (const debt of expenseDebts(expense)) {
+      if (debt.fromId === bId && debt.toId === aId) change += debt.amount;
+      if (debt.fromId === aId && debt.toId === bId) change -= debt.amount;
+    }
+    steps.push({ kind: 'expense', item: expense, change });
+  }
+
+  for (const payment of payments) {
+    const between =
+      (payment.fromId === aId && payment.toId === bId) ||
+      (payment.fromId === bId && payment.toId === aId);
+    if (!between) continue;
+
+    let change = 0;
+    if (isConfirmed(payment)) {
+      // b paid a → b owes a less. a paid b → b owes a more (or a owed b).
+      change = payment.fromId === bId ? -payment.amount : payment.amount;
+    }
+    steps.push({ kind: 'payment', item: payment, change });
+  }
+
+  // Oldest first. Array sort is stable, so equal times keep the order above
+  // (expenses before payments).
+  steps.sort((x, y) => x.item.created_at - y.item.created_at);
+
+  let remaining = 0;
+  return steps.map(({ kind, item, change }) => {
+    remaining += change;
+    return { kind, id: item.id, created_at: item.created_at, item, change, remaining };
+  });
+}
+
+/**
  * Short summary of a group for the Groups list:
  *   { memberCount, totalSpent, toSettle }
  *
@@ -381,7 +557,8 @@ export function coverFromFund(left, amount) {
  *   group     { fund_holder_id }   (null/undefined = no fund)
  *   expenses  live expenses; the ones with from_fund = 1 spend from the fund
  *   payments  live payments; 'contribution' adds to the fund, 'return' takes
- *             leftover back out. 'settlement' payments are ignored here.
+ *             leftover back out. 'settlement' payments are ignored here, and
+ *             so are payments that aren't confirmed.
  *
  * Returns:
  *   {
@@ -408,6 +585,8 @@ export function fundSummary(group, expenses, payments) {
   // Collect every fund event, then put them in time order.
   const events = [];
   for (const payment of payments) {
+    // Like computeBalances: money only counts once the receiver confirmed it.
+    if (!isConfirmed(payment)) continue;
     if (payment.type === 'contribution' || payment.type === 'return') {
       events.push({ kind: payment.type === 'contribution' ? 'in' : 'return', item: payment });
     }

@@ -14,6 +14,9 @@ import {
   computeBalances,
   settleUp,
   summarizeGroup,
+  pairwiseDebts,
+  historyBetween,
+  fundSummary,
 } from '../src/logic/split.js';
 
 const members = ['A', 'B', 'C', 'D'].map((id) => ({ id, name: id }));
@@ -328,4 +331,140 @@ test('summarizeGroup: payments reduce toSettle but not totalSpent', () => {
   ];
   const summary = summarizeGroup(members, threeMeals(), payments);
   assert.deepEqual(summary, { memberCount: 4, totalSpent: 1700, toSettle: 0 });
+});
+
+// --- Payment status: only confirmed payments count ---
+
+test('computeBalances: only confirmed payments count', () => {
+  const payments = [
+    { fromId: 'D', toId: 'B', amount: 350, status: 'pending' },
+    { fromId: 'D', toId: 'B', amount: 100, status: 'rejected' },
+    { fromId: 'D', toId: 'B', amount: 100, status: 'cancelled' },
+    { fromId: 'C', toId: 'A', amount: 200, status: 'confirmed' },
+  ];
+  // Only C -> A 200 is real: A +200 -> 0, C -250 -> -50. B and D unchanged.
+  assert.deepEqual(computeBalances(members, threeMeals(), payments), {
+    A: 0, B: 400, C: -50, D: -350,
+  });
+});
+
+test('computeBalances: a payment with no status (old phone row) counts', () => {
+  const balances = computeBalances(members, threeMeals(), [{ fromId: 'D', toId: 'B', amount: 350 }]);
+  assert.equal(balances.D, 0);
+});
+
+test('computeBalances: partial payments add up', () => {
+  // D owes 350; pays it back in two parts.
+  const payments = [
+    { fromId: 'D', toId: 'B', amount: 100, status: 'confirmed' },
+    { fromId: 'D', toId: 'B', amount: 50, status: 'confirmed' },
+  ];
+  assert.equal(computeBalances(members, threeMeals(), payments).D, -200);
+});
+
+test('fundSummary: a pending contribution is not in the fund yet', () => {
+  const payments = [
+    { id: 'p1', fromId: 'B', toId: 'A', amount: 500, type: 'contribution', status: 'confirmed', created_at: 1 },
+    { id: 'p2', fromId: 'C', toId: 'A', amount: 500, type: 'contribution', status: 'pending', created_at: 2 },
+  ];
+  const fund = fundSummary({ fund_holder_id: 'A' }, [], payments);
+  assert.equal(fund.totalIn, 500);
+  assert.equal(fund.left, 500);
+  assert.deepEqual(fund.contributions, { B: 500 });
+});
+
+// --- Pairwise debts (simplify_debts off) ---
+
+test('pairwiseDebts: three meals — everyone pays exactly who they ate with', () => {
+  const debts = pairwiseDebts(threeMeals(), []);
+  // Breakfast (A paid 600 for A,B,C): B owes A 200, C owes A 200.
+  // Lunch (B paid 800 for all 4): A, C, D each owe B 200 -> A/B nets to 0.
+  // Dinner (C paid 300 for C,D): D owes C 150.
+  assert.deepEqual(transferList(debts), [
+    'C->A 200',
+    'C->B 200',
+    'D->B 200',
+    'D->C 150',
+  ]);
+  // Different people pay, but everyone still ends at exactly 0.
+  assertSettlesToZero(computeBalances(members, threeMeals(), []), debts);
+});
+
+test('pairwiseDebts: a chain is NOT shortened (unlike settleUp)', () => {
+  const expenses = [equal(200, { A: 200 }, ['B']), equal(200, { B: 200 }, ['C'])];
+  const balances = computeBalances(members, expenses, []);
+  assert.deepEqual(transferList(settleUp(balances)), ['C->A 200']);
+  assert.deepEqual(transferList(pairwiseDebts(expenses, [])), ['B->A 200', 'C->B 200']);
+});
+
+test('pairwiseDebts: debts in both directions cancel out', () => {
+  // A paid 300 for B; B paid 100 for A -> B owes A 200.
+  const expenses = [equal(300, { A: 300 }, ['B']), equal(100, { B: 100 }, ['A'])];
+  assert.deepEqual(pairwiseDebts(expenses, []), [{ fromId: 'B', toId: 'A', amount: 200 }]);
+});
+
+test('pairwiseDebts: confirmed payments reduce the debt, others do not', () => {
+  const expenses = [equal(300, { A: 300 }, ['B'])];
+  const payments = [
+    { fromId: 'B', toId: 'A', amount: 100, status: 'confirmed' },
+    { fromId: 'B', toId: 'A', amount: 200, status: 'pending' },
+  ];
+  assert.deepEqual(pairwiseDebts(expenses, payments), [{ fromId: 'B', toId: 'A', amount: 200 }]);
+
+  // Paying too much flips the debt: now A owes B the extra.
+  const over = [{ fromId: 'B', toId: 'A', amount: 350, status: 'confirmed' }];
+  assert.deepEqual(pairwiseDebts(expenses, over), [{ fromId: 'A', toId: 'B', amount: 50 }]);
+});
+
+test('pairwiseDebts: several payers, uneven split, still exact', () => {
+  const dinner = equal(2000, { A: 1200, B: 800 }, ['A', 'B', 'C', 'D']);
+  const debts = pairwiseDebts([dinner], []);
+  assertSettlesToZero(computeBalances(members, [dinner], []), debts);
+  assert.ok(debts.every((d) => Number.isInteger(d.amount) && d.amount > 0));
+});
+
+test('pairwiseDebts: nothing owed -> empty list', () => {
+  assert.deepEqual(pairwiseDebts([], []), []);
+  assert.deepEqual(pairwiseDebts([equal(100, { A: 100 }, ['A'])], []), []);
+});
+
+// --- History between two members ---
+
+test('historyBetween: expenses and payments in time order, with what is left', () => {
+  const at = (item, created_at, id) => ({ ...item, created_at, id });
+  const expenses = [
+    at(equal(600, { A: 600 }, ['A', 'B', 'C']), 10, 'breakfast'), // B owes A 200
+    at(equal(300, { C: 300 }, ['C', 'D']), 20, 'dinner'), // A and B not in it
+    at(equal(100, { B: 100 }, ['A']), 30, 'chai'), // A owes B 100
+    at(equal(400, { C: 400 }, ['A', 'B']), 35, 'taxi'), // both in it, but C paid
+  ];
+  const payments = [
+    { id: 'p1', fromId: 'B', toId: 'A', amount: 50, status: 'confirmed', created_at: 40 },
+    { id: 'p2', fromId: 'B', toId: 'A', amount: 50, status: 'pending', created_at: 50 },
+    { id: 'p3', fromId: 'C', toId: 'A', amount: 70, status: 'confirmed', created_at: 60 },
+  ];
+
+  const steps = historyBetween('A', 'B', expenses, payments);
+  assert.deepEqual(
+    steps.map((s) => [s.id, s.kind, s.change, s.remaining]),
+    [
+      ['breakfast', 'expense', 200, 200],
+      ['chai', 'expense', -100, 100],
+      ['taxi', 'expense', 0, 100],
+      ['p1', 'payment', -50, 50],
+      ['p2', 'payment', 0, 50], // pending: listed, but nothing changes
+    ]
+  );
+
+  // The last "remaining" matches the pairwise debt between the two.
+  const debts = pairwiseDebts(expenses, payments);
+  assert.ok(debts.some((d) => d.fromId === 'B' && d.toId === 'A' && d.amount === 50));
+});
+
+test('historyBetween: seen from the other side, the numbers flip', () => {
+  const expenses = [{ ...equal(600, { A: 600 }, ['A', 'B', 'C']), id: 'e', created_at: 1 }];
+  assert.deepEqual(
+    historyBetween('B', 'A', expenses, []).map((s) => [s.change, s.remaining]),
+    [[-200, -200]] // B owes A 200 = A "owes" B -200
+  );
 });

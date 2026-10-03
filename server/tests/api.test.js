@@ -1,54 +1,130 @@
-// api.test.js — tests every endpoint against a real (in-memory) MongoDB.
+// api.test.js — accounts, uploading groups, and pulling /changes, against a
+// real (in-memory) MongoDB. Invites, payments, expenses and roles have their
+// own test files.
 // Run with:  cd server && npm test
 
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { api, sampleGroup, startTestDb, stopTestDb, uploadAndClaim } from './helpers.js';
+import {
+  api,
+  auth,
+  createAccount,
+  joinAs,
+  sampleGroup,
+  startTestDb,
+  stopTestDb,
+  uploadGroup,
+} from './helpers.js';
 import { createApp } from '../src/app.js';
-import { Device, Expense, Group, Member, Payment } from '../src/models.js';
-import { saveWithSeqs } from '../src/seq.js';
+import { Account, Device, Expense, Group, Member, Payment } from '../src/models.js';
 import { hashToken } from '../src/auth.js';
 
 before(startTestDb);
 after(stopTestDb);
 
+describe('POST /accounts', () => {
+  test('makes an account and a token; the server keeps only the hash', async () => {
+    const res = await api()
+      .post('/accounts')
+      .send({ name: ' Nisar ', username: '@Nisar_1' })
+      .expect(201);
+
+    // "@" and capitals are tidied away.
+    assert.deepEqual(
+      { name: res.body.account.name, username: res.body.account.username },
+      { name: 'Nisar', username: 'nisar_1' }
+    );
+    const token = res.body.token;
+    assert.ok(token.length >= 40);
+
+    const device = await Device.findById(res.body.device_id).lean();
+    assert.equal(device.account_id, res.body.account.id);
+    assert.equal(device.token_hash, hashToken(token));
+    assert.ok(!JSON.stringify(device).includes(token));
+
+    // The token works.
+    const me = await api().get('/me').set(auth(token)).expect(200);
+    assert.equal(me.body.account.username, 'nisar_1');
+    assert.deepEqual(me.body.groups, []);
+  });
+
+  test('usernames are unique, whatever the capitals', async () => {
+    await api().post('/accounts').send({ name: 'Bilal', username: 'bilal' }).expect(201);
+    const res = await api().post('/accounts').send({ name: 'Other', username: '@BILAL' }).expect(409);
+    assert.match(res.body.error, /@bilal is taken/);
+    assert.equal(await Account.countDocuments({ username: 'bilal' }), 1);
+  });
+
+  test('rejects bad names and usernames', async () => {
+    for (const username of ['ab', 'has space', 'way_too_long_username_here', 'dash-ed', '', { $ne: '' }]) {
+      await api().post('/accounts').send({ name: 'X', username }).expect(400);
+    }
+    await api().post('/accounts').send({ name: '  ', username: 'okname' }).expect(400);
+  });
+
+  test('no token or a made-up token → 401', async () => {
+    await api().get('/me').expect(401);
+    await api().get('/me').set(auth('not-a-real-token')).expect(401);
+  });
+
+  test('sign-ups are rate limited per IP', async () => {
+    const app = createApp({ rateLimit: { max: 2, windowMs: 60000 } });
+    const signUp = (username, ip) =>
+      api(app).post('/accounts').set('X-Forwarded-For', ip).send({ name: 'X', username });
+    await signUp('rl_one', '1.1.1.1').expect(201);
+    await signUp('rl_two', '1.1.1.1').expect(201);
+    const res = await signUp('rl_three', '1.1.1.1').expect(429);
+    assert.ok(Number(res.headers['retry-after']) > 0);
+    await signUp('rl_four', '2.2.2.2').expect(201); // a different phone is not blocked
+  });
+});
+
 describe('POST /groups', () => {
-  test('saves the group and returns an invite code like YAR-K7QM-3XHP', async () => {
-    const { ids, body } = sampleGroup();
-    const res = await api().post('/groups').send(body).expect(201);
+  test('needs an account', async () => {
+    await api().post('/groups').send(sampleGroup().body).expect(401);
+  });
 
-    // 8 characters, none of the easily confused 0, O, 1, I, L.
-    assert.match(res.body.invite_code, /^YAR-[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$/);
-    assert.equal(res.body.group_id, ids.group);
+  test('saves the group; the uploader becomes its admin', async () => {
+    const { ids, admin } = await uploadGroup();
 
-    // Stored under the app's own UUIDs.
     const group = await Group.findById(ids.group).lean();
     assert.equal(group.name, 'Kund Malir trip');
-    assert.equal(group.invite_code, res.body.invite_code);
-    assert.equal(await Member.countDocuments({ group_id: ids.group }), 4);
-    assert.equal(await Expense.countDocuments({ group_id: ids.group }), 2);
-    assert.equal(await Payment.countDocuments({ group_id: ids.group }), 1);
+    assert.equal(group.simplify_debts, 1); // on by default
+    assert.equal(group.invite_code, undefined); // no open invite codes any more
 
-    // Every document got its own seq number, and none of them repeat.
-    const docs = [
-      group,
-      ...(await Member.find({ group_id: ids.group }).lean()),
-      ...(await Expense.find({ group_id: ids.group }).lean()),
-      ...(await Payment.find({ group_id: ids.group }).lean()),
-    ];
-    const seqs = docs.map((d) => d.seq);
-    assert.ok(seqs.every((s) => Number.isInteger(s) && s > 0));
-    assert.equal(new Set(seqs).size, seqs.length);
+    const members = await Member.find({ group_id: ids.group }).lean();
+    const a = members.find((m) => m._id === ids.A);
+    assert.deepEqual(
+      [a.account_id, a.username, a.role],
+      [admin.account.id, admin.account.username, 'admin']
+    );
+    // Everyone else is an empty slot until they accept an invite.
+    for (const m of members.filter((m) => m._id !== ids.A)) {
+      assert.deepEqual([m.account_id, m.role], [null, 'member']);
+    }
+
+    // Everything uploaded was made by A.
+    const expenses = await Expense.find({ group_id: ids.group }).lean();
+    assert.ok(expenses.every((e) => e.created_by === ids.A && e.updated_by === ids.A));
+
+    // Old payments come in confirmed by the admin (nobody had accounts then).
+    const [payment] = await Payment.find({ group_id: ids.group }).lean();
+    assert.equal(payment.status, 'confirmed');
+    assert.equal(payment.confirmed_by, 'admin');
+    assert.ok(payment.confirmed_at > 0);
+
+    // It shows up in GET /me.
+    const me = await api().get('/me').set(auth(admin.token)).expect(200);
+    assert.deepEqual(me.body.groups, [
+      { group_id: ids.group, name: 'Kund Malir trip', member_id: ids.A, role: 'admin' },
+    ]);
   });
 
   test('each group counts its own seq numbers: 1, 2, 3, ...', async () => {
-    const { ids, body } = sampleGroup();
-    await api().post('/groups').send(body).expect(201);
-
+    const { ids } = await uploadGroup();
     // 4 members + 2 expenses + 1 payment + the group = seq 1 to 8.
-    const group = await Group.findById(ids.group).lean();
     const docs = [
-      group,
+      await Group.findById(ids.group).lean(),
       ...(await Member.find({ group_id: ids.group }).lean()),
       ...(await Expense.find({ group_id: ids.group }).lean()),
       ...(await Payment.find({ group_id: ids.group }).lean()),
@@ -57,310 +133,175 @@ describe('POST /groups', () => {
       docs.map((d) => d.seq).sort((a, b) => a - b),
       [1, 2, 3, 4, 5, 6, 7, 8]
     );
-    // The group is saved last, so it gets the highest number.
-    assert.equal(group.seq, 8);
   });
 
   test('uploading the same group twice is refused', async () => {
-    const { body } = sampleGroup();
-    await api().post('/groups').send(body).expect(201);
-    const res = await api().post('/groups').send(body).expect(409);
+    const { body, token } = await uploadGroup();
+    const res = await api().post('/groups').set(auth(token)).send(body).expect(409);
     assert.match(res.body.error, /already uploaded/);
   });
 
+  test('my_member_id must be a live member', async () => {
+    const { token } = await createAccount();
+    for (const pick of [undefined, 'stranger', 'D']) {
+      const { ids, body } = sampleGroup();
+      body.my_member_id = pick === 'D' ? ids.D : pick; // D was removed
+      const res = await api().post('/groups').set(auth(token)).send(body).expect(400);
+      assert.ok(res.body.errors.includes('my_member_id must be one of the live members.'));
+    }
+  });
+
   test("rejects an expense whose payers don't add up (prepareExpense check)", async () => {
+    const { token } = await createAccount();
     const { ids, body } = sampleGroup();
     body.expenses[0].payers = [{ member_id: body.members[0].id, amount: 900 }];
 
-    const res = await api().post('/groups').send(body).expect(400);
+    const res = await api().post('/groups').set(auth(token)).send(body).expect(400);
     assert.ok(
-      res.body.errors.includes(
-        'expenses[0]: Payers add up to 900 but the total is 1000 (100 short).'
-      )
+      res.body.errors.includes('expenses[0]: Payers add up to 900 but the total is 1000 (100 short).')
     );
     // Nothing at all was saved.
     assert.equal(await Group.exists({ _id: ids.group }), null);
     assert.equal(await Member.countDocuments({ group_id: ids.group }), 0);
   });
 
-  test('rejects decimal rupees and custom shares that miss the total', async () => {
+  test('rejects decimal rupees, bad shares, strangers and bad payments', async () => {
+    const { token } = await createAccount();
     const { body } = sampleGroup();
     body.expenses[0].amount = 999.5;
     body.expenses[1].participants[1].share = 40; // 100 + 40 = 140, not 150
-
-    const res = await api().post('/groups').send(body).expect(400);
-    assert.ok(
-      res.body.errors.includes('expenses[0]: Total must be a whole number of rupees, more than 0.')
-    );
-    assert.ok(
-      res.body.errors.includes(
-        'expenses[1]: Shares add up to 140 but the total is 150 (10 short).'
-      )
-    );
-  });
-
-  test('rejects an expense that mentions someone outside the group', async () => {
-    const { body } = sampleGroup();
-    body.expenses[0].participants[2].member_id = 'stranger';
-
-    const res = await api().post('/groups').send(body).expect(400);
-    assert.ok(res.body.errors.includes('expenses[0]: stranger is not a member of this group.'));
-  });
-
-  test('rejects a bad payment type and a zero payment', async () => {
-    const { body } = sampleGroup();
     body.payments[0].type = 'gift';
     body.payments[0].amount = 0;
 
-    const res = await api().post('/groups').send(body).expect(400);
-    assert.ok(
-      res.body.errors.includes('payments[0]: type must be one of: settlement, contribution, return.')
-    );
-    assert.ok(
-      res.body.errors.includes(
-        'payments[0]: amount must be a whole number of rupees, more than 0.'
-      )
-    );
+    const res = await api().post('/groups').set(auth(token)).send(body).expect(400);
+    for (const message of [
+      'expenses[0]: Total must be a whole number of rupees, more than 0.',
+      'expenses[1]: Shares add up to 140 but the total is 150 (10 short).',
+      'payments[0]: type must be one of: settlement, contribution, return.',
+      'payments[0]: amount must be a whole number of rupees, more than 0.',
+    ]) {
+      assert.ok(res.body.errors.includes(message), message);
+    }
+
+    const other = sampleGroup();
+    other.body.expenses[0].participants[2].member_id = 'stranger';
+    const res2 = await api().post('/groups').set(auth(token)).send(other.body).expect(400);
+    assert.ok(res2.body.errors.includes('expenses[0]: stranger is not a member of this group.'));
+
+    const third = sampleGroup();
+    third.body.group.simplify_debts = 'yes';
+    const res3 = await api().post('/groups').set(auth(token)).send(third.body).expect(400);
+    assert.deepEqual(res3.body.errors, ['group: simplify_debts must be 0 or 1.']);
   });
 
   test('stores freshly calculated shares for equal splits', async () => {
-    const { ids, body } = sampleGroup();
+    const { token } = await createAccount();
+    const { body } = sampleGroup();
     // Wrong shares sent for an equal split: the server works them out itself.
     body.expenses[0].participants = body.expenses[0].participants.map((p) => ({
       member_id: p.member_id,
       share: 1,
     }));
-    await api().post('/groups').send(body).expect(201);
+    await api().post('/groups').set(auth(token)).send(body).expect(201);
 
     const saved = await Expense.findById(body.expenses[0].id).lean();
     assert.deepEqual(
       saved.participants.map((p) => p.share),
       [334, 333, 333]
     );
-    assert.equal(saved.group_id, ids.group);
   });
 });
 
-describe('POST /join', () => {
-  test('returns the group and its live members', async () => {
-    const { ids, body } = sampleGroup();
-    const upload = await api().post('/groups').send(body).expect(201);
-
-    // Typed sloppily on purpose: lower case, spaces instead of dashes.
-    const code = ` ${upload.body.invite_code.toLowerCase().replaceAll('-', ' ')} `;
-    const res = await api().post('/join').send({ invite_code: code }).expect(200);
-
-    assert.equal(res.body.group.id, ids.group);
-    assert.equal(res.body.group.name, 'Kund Malir trip');
-    // D was deleted, so only A, B, C — nobody has claimed them yet.
-    assert.deepEqual(
-      res.body.members.map((m) => [m.name, m.claimed]),
-      [
-        ['A', false],
-        ['B', false],
-        ['C', false],
-      ]
-    );
-  });
-
-  test('shows who is already claimed', async () => {
-    const { inviteCode } = await uploadAndClaim(); // claims A
-    const res = await api().post('/join').send({ invite_code: inviteCode }).expect(200);
-    assert.deepEqual(
-      res.body.members.map((m) => m.claimed),
-      [true, false, false]
-    );
-  });
-
-  test('unknown invite code → 404', async () => {
-    await api().post('/join').send({ invite_code: 'YAR-XXXX-XXXX' }).expect(404);
-    await api().post('/join').send({ invite_code: 'YAR-1234' }).expect(404); // old short style
-    await api().post('/join').send({ invite_code: { $ne: '' } }).expect(404); // not text
-  });
-});
-
-describe('POST /claim', () => {
-  test('returns a secret token; the server keeps only its hash', async () => {
-    const { ids, inviteCode, token } = await uploadAndClaim();
-    assert.equal(typeof token, 'string');
-    assert.ok(token.length >= 40);
-
-    const device = await Device.findOne({ member_id: ids.A }).lean();
-    assert.equal(device.group_id, ids.group);
-    assert.equal(device.token_hash, hashToken(token));
-    // The token itself appears nowhere in the stored document.
-    assert.ok(!JSON.stringify(device).includes(token));
-
-    // Claiming again (e.g. a new phone) gives a different token.
-    const again = await api()
-      .post('/claim')
-      .send({ invite_code: inviteCode, member_id: ids.A })
-      .expect(201);
-    assert.notEqual(again.body.token, token);
-  });
-
-  test('records each claim, marking a second phone for the same member', async () => {
-    const { ids, inviteCode, token } = await uploadAndClaim(); // A's first phone
-    await api().post('/claim').send({ invite_code: inviteCode, member_id: ids.B }).expect(201);
-    await api().post('/claim').send({ invite_code: inviteCode, member_id: ids.A }).expect(201);
-
-    // Other phones see the claims in /changes, in order, so the app can say
-    // "A new phone joined as A".
-    const res = await api()
-      .get(`/groups/${ids.group}/changes`)
-      .set('Authorization', `Bearer ${token}`)
-      .expect(200);
-    assert.deepEqual(
-      res.body.devices.map((d) => [d.member_id, d.already_claimed]),
-      [
-        [ids.A, 0], // A's first phone
-        [ids.B, 0], // B's first phone
-        [ids.A, 1], // A AGAIN: a new phone for someone who already had one
-      ]
-    );
-  });
-
-  test('two claims of the same member at once: only one is the "first"', async () => {
-    const { ids, body } = sampleGroup();
-    const upload = await api().post('/groups').send(body).expect(201);
-    const claim = () =>
-      api().post('/claim').send({ invite_code: upload.body.invite_code, member_id: ids.C });
-    await Promise.all([claim().expect(201), claim().expect(201), claim().expect(201)]);
-
-    const devices = await Device.find({ member_id: ids.C }).lean();
-    assert.deepEqual(
-      devices.map((d) => d.already_claimed).sort(),
-      [0, 1, 1]
-    );
-  });
-
-  test("can't claim a member of another group, or a deleted member", async () => {
-    const mine = sampleGroup();
-    const other = sampleGroup();
-    const upload = await api().post('/groups').send(mine.body).expect(201);
-    await api().post('/groups').send(other.body).expect(201);
-
-    const code = upload.body.invite_code;
-    await api().post('/claim').send({ invite_code: code, member_id: other.ids.A }).expect(404);
-    await api().post('/claim').send({ invite_code: code, member_id: mine.ids.D }).expect(404);
-  });
-
-  test('rejects a member_id that is not plain text', async () => {
-    const { body } = sampleGroup();
-    const upload = await api().post('/groups').send(body).expect(201);
-    await api()
-      .post('/claim')
-      .send({ invite_code: upload.body.invite_code, member_id: { $ne: '' } })
-      .expect(400);
-  });
-});
-
-describe('GET /groups/:groupId/changes (needs a token)', () => {
-  test('no token → 401, made-up token → 401', async () => {
-    const { ids } = await uploadAndClaim();
+describe('GET /groups/:groupId/changes', () => {
+  test('no token → 401; an account that is not in the group → 403', async () => {
+    const { ids } = await uploadGroup();
+    const outsider = await createAccount();
     await api().get(`/groups/${ids.group}/changes`).expect(401);
-    await api()
-      .get(`/groups/${ids.group}/changes`)
-      .set('Authorization', 'Bearer not-a-real-token')
-      .expect(401);
-  });
-
-  test("a token for one group can't read another group → 403", async () => {
-    const { token } = await uploadAndClaim();
-    const { ids: otherIds } = await uploadAndClaim();
-    await api()
-      .get(`/groups/${otherIds.group}/changes`)
-      .set('Authorization', `Bearer ${token}`)
-      .expect(403);
+    await api().get(`/groups/${ids.group}/changes`).set(auth(outsider.token)).expect(403);
+    await api().get('/groups/no-such-group/changes').set(auth(outsider.token)).expect(404);
   });
 
   test('returns everything, including deleted rows, with the app ids', async () => {
-    const { ids, token } = await uploadAndClaim();
-    const res = await api()
-      .get(`/groups/${ids.group}/changes`)
-      .set('Authorization', `Bearer ${token}`)
-      .expect(200);
+    const { ids, token, admin } = await uploadGroup();
+    const res = await api().get(`/groups/${ids.group}/changes`).set(auth(token)).expect(200);
 
     assert.equal(res.body.group.id, ids.group);
-    assert.equal(res.body.group.invite_code, undefined);
+    assert.equal(res.body.group.simplify_debts, 1);
     assert.equal(res.body.members.length, 4); // D (deleted) too
     assert.equal(res.body.expenses.length, 2);
     assert.equal(res.body.payments.length, 1);
     assert.equal(res.body.expenses[0].payers[0].member_id, ids.A);
+    assert.equal(res.body.payments[0].status, 'confirmed');
     assert.equal(res.body.has_more, false);
 
-    // The claim of A shows up as a device — without its token hash.
-    assert.equal(res.body.devices.length, 1);
-    assert.equal(res.body.devices[0].member_id, ids.A);
-    assert.equal(res.body.devices[0].token_hash, undefined);
+    // Members carry their account link and role.
+    const a = res.body.members.find((m) => m.id === ids.A);
+    assert.deepEqual([a.username, a.role], [admin.account.username, 'admin']);
 
-    // last_seq is the biggest seq in the reply.
-    const all = [
-      res.body.group,
-      ...res.body.members,
-      ...res.body.expenses,
-      ...res.body.payments,
-      ...res.body.devices,
-    ];
+    const all = [res.body.group, ...res.body.members, ...res.body.expenses, ...res.body.payments];
     assert.equal(res.body.last_seq, Math.max(...all.map((d) => d.seq)));
   });
 
   test('soft-deleted rows (deleted: 1) are sent too, so phones learn about deletions', async () => {
+    const { token } = await createAccount();
     const { ids, body } = sampleGroup(); // member D is already deleted
     body.expenses[1].deleted = 1;
     body.payments[0].deleted = 1;
-    const upload = await api().post('/groups').send(body).expect(201);
-    const claim = await api()
-      .post('/claim')
-      .send({ invite_code: upload.body.invite_code, member_id: ids.A })
-      .expect(201);
+    await api().post('/groups').set(auth(token)).send(body).expect(201);
 
-    const res = await api()
-      .get(`/groups/${ids.group}/changes`)
-      .set('Authorization', `Bearer ${claim.body.token}`)
-      .expect(200);
-
+    const res = await api().get(`/groups/${ids.group}/changes`).set(auth(token)).expect(200);
     const byId = (list, id) => list.find((row) => row.id === id);
     assert.equal(byId(res.body.members, ids.D).deleted, 1);
     assert.equal(byId(res.body.expenses, body.expenses[1].id).deleted, 1);
     assert.equal(byId(res.body.payments, body.payments[0].id).deleted, 1);
-    // ...next to the live ones.
-    assert.equal(byId(res.body.members, ids.A).deleted, 0);
     assert.equal(byId(res.body.expenses, body.expenses[0].id).deleted, 0);
 
-    // A row deleted LATER (deleted 0 → 1 with a new seq) shows up when
-    // pulling from the old last_seq.
-    // (Done the way the future sync endpoint will: through saveWithSeqs.)
+    // A row deleted LATER (through the API: deleted 0 → 1 with a new seq)
+    // shows up when pulling from the old last_seq.
     const before = res.body.last_seq;
-    await saveWithSeqs(ids.group, 1, ([seq], session) =>
-      Expense.updateOne(
-        { _id: body.expenses[0].id },
-        { $set: { deleted: 1, updated_at: Date.now(), seq } },
-        { session }
-      )
-    );
+    await api()
+      .delete(`/groups/${ids.group}/expenses/${body.expenses[0].id}`)
+      .set(auth(token))
+      .expect(200);
 
     const later = await api()
       .get(`/groups/${ids.group}/changes?since=${before}`)
-      .set('Authorization', `Bearer ${claim.body.token}`)
+      .set(auth(token))
       .expect(200);
     assert.deepEqual(
-      later.body.expenses.map((e) => [e.id, e.deleted]),
-      [[body.expenses[0].id, 1]]
+      later.body.expenses.map((e) => [e.id, e.deleted, e.updated_by]),
+      [[body.expenses[0].id, 1, ids.A]]
     );
     assert.equal(later.body.last_seq, before + 1);
+    // Still there in the database: soft delete only.
+    assert.ok(await Expense.exists({ _id: body.expenses[0].id }));
+  });
+
+  test('a friend joining shows up as a member change', async () => {
+    const group = await uploadGroup();
+    const first = await api().get(`/groups/${group.ids.group}/changes`).set(auth(group.token)).expect(200);
+    const bilal = await joinAs(group, 'B');
+
+    const later = await api()
+      .get(`/groups/${group.ids.group}/changes?since=${first.body.last_seq}`)
+      .set(auth(group.token))
+      .expect(200);
+    assert.deepEqual(
+      later.body.members.map((m) => [m.id, m.username, m.role]),
+      [[group.ids.B, bilal.account.username, 'member']]
+    );
   });
 
   test('pages: ?limit=N returns N at a time, in seq order, with has_more', async () => {
-    const { ids, token } = await uploadAndClaim(); // 8 uploaded + 1 device = 9
+    const { ids, token } = await uploadGroup(); // 8 documents
 
     const seen = [];
     let since = 0;
     let pages = 0;
     for (;;) {
       const res = await api()
-        .get(`/groups/${ids.group}/changes?since=${since}&limit=4`)
-        .set('Authorization', `Bearer ${token}`)
+        .get(`/groups/${ids.group}/changes?since=${since}&limit=3`)
+        .set(auth(token))
         .expect(200);
       pages++;
       const rows = [
@@ -368,119 +309,43 @@ describe('GET /groups/:groupId/changes (needs a token)', () => {
         ...res.body.members,
         ...res.body.expenses,
         ...res.body.payments,
-        ...res.body.devices,
       ];
-      assert.ok(rows.length <= 4);
+      assert.ok(rows.length <= 3);
       seen.push(...rows.map((r) => r.seq));
       since = res.body.last_seq;
       if (!res.body.has_more) break;
     }
 
-    assert.equal(pages, 3); // 4 + 4 + 1
+    assert.equal(pages, 3); // 3 + 3 + 2
     assert.deepEqual(
       seen.sort((a, b) => a - b),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9]
+      [1, 2, 3, 4, 5, 6, 7, 8]
     );
   });
 
   test('rejects a bad limit', async () => {
-    const { ids, token } = await uploadAndClaim();
+    const { ids, token } = await uploadGroup();
     for (const limit of ['0', '-1', 'abc', '1001']) {
-      await api()
-        .get(`/groups/${ids.group}/changes?limit=${limit}`)
-        .set('Authorization', `Bearer ${token}`)
-        .expect(400);
+      await api().get(`/groups/${ids.group}/changes?limit=${limit}`).set(auth(token)).expect(400);
     }
   });
 
   test('since=<last_seq> returns nothing when nothing changed', async () => {
-    const { ids, token } = await uploadAndClaim();
-    const first = await api()
-      .get(`/groups/${ids.group}/changes`)
-      .set('Authorization', `Bearer ${token}`)
-      .expect(200);
-
+    const { ids, token } = await uploadGroup();
+    const first = await api().get(`/groups/${ids.group}/changes`).set(auth(token)).expect(200);
     const res = await api()
       .get(`/groups/${ids.group}/changes?since=${first.body.last_seq}`)
-      .set('Authorization', `Bearer ${token}`)
+      .set(auth(token))
       .expect(200);
     assert.equal(res.body.group, null);
-    assert.equal(res.body.members.length, 0);
-    assert.equal(res.body.expenses.length, 0);
-    assert.equal(res.body.payments.length, 0);
+    assert.equal(res.body.members.length + res.body.expenses.length + res.body.payments.length, 0);
     assert.equal(res.body.last_seq, first.body.last_seq);
   });
 });
 
-describe('rate limiting on /join and /claim', () => {
-  test('the 11th try in a minute from one IP gets 429', async () => {
-    const app = createApp(); // one app, so the counts carry across requests
-    for (let i = 0; i < 10; i++) {
-      await api(app).post('/join').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(404);
-    }
-    const res = await api(app).post('/join').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(429);
-    assert.match(res.body.error, /Too many tries/);
-    assert.ok(Number(res.headers['retry-after']) > 0);
-
-    // /claim counts separately, and has the same limit.
-    for (let i = 0; i < 10; i++) {
-      await api(app).post('/claim').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(404);
-    }
-    await api(app).post('/claim').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(429);
-  });
-
-  test('counts each IP separately (behind Render, from X-Forwarded-For)', async () => {
-    const app = createApp({ rateLimit: { max: 2, windowMs: 60000 } });
-    const join = (ip) =>
-      api(app).post('/join').set('X-Forwarded-For', ip).send({ invite_code: 'YAR-AAAA-AAAA' });
-    await join('1.1.1.1').expect(404);
-    await join('1.1.1.1').expect(404);
-    await join('1.1.1.1').expect(429);
-    await join('2.2.2.2').expect(404); // a different phone is not blocked
-  });
-
-  test('the limit resets after the window', async () => {
-    const app = createApp({ rateLimit: { max: 1, windowMs: 50 } });
-    await api(app).post('/join').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(404);
-    await api(app).post('/join').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(429);
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    await api(app).post('/join').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(404);
-  });
-});
-
-describe('POST /groups/:groupId/new-invite-code (needs a token)', () => {
-  test('replaces the code: the old one stops working, the new one works', async () => {
-    const { ids, inviteCode, token } = await uploadAndClaim();
-    const res = await api()
-      .post(`/groups/${ids.group}/new-invite-code`)
-      .set('Authorization', `Bearer ${token}`)
-      .expect(200);
-
-    const newCode = res.body.invite_code;
-    assert.match(newCode, /^YAR-[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$/);
-    assert.notEqual(newCode, inviteCode);
-
-    await api().post('/join').send({ invite_code: inviteCode }).expect(404);
-    await api().post('/claim').send({ invite_code: inviteCode, member_id: ids.B }).expect(404);
-    const join = await api().post('/join').send({ invite_code: newCode }).expect(200);
-    assert.equal(join.body.group.id, ids.group);
-
-    // Phones that already joined keep working with their tokens.
-    await api()
-      .get(`/groups/${ids.group}/changes`)
-      .set('Authorization', `Bearer ${token}`)
-      .expect(200);
-  });
-
-  test('needs a token for THAT group', async () => {
-    const { ids } = await uploadAndClaim();
-    const { token: otherToken } = await uploadAndClaim();
-    await api().post(`/groups/${ids.group}/new-invite-code`).expect(401);
-    await api()
-      .post(`/groups/${ids.group}/new-invite-code`)
-      .set('Authorization', `Bearer ${otherToken}`)
-      .expect(403);
-  });
+test('the old open flows are gone: /join and /claim → 404', async () => {
+  await api().post('/join').send({ invite_code: 'YAR-AAAA-AAAA' }).expect(404);
+  await api().post('/claim').send({ invite_code: 'YAR-AAAA-AAAA', member_id: 'x' }).expect(404);
 });
 
 test('health check and unknown routes', async () => {
