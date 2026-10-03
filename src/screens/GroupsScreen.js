@@ -85,6 +85,7 @@ export default function GroupsScreen({ navigation }) {
         <Image
           source={require('../../assets/yaarsplit-logo.png')}
           style={styles.logo}
+          resizeMode="contain"
           accessibilityLabel="YaarSplit"
         />
         <Text style={styles.tagline}>Split every meal by who actually ate.</Text>
@@ -205,19 +206,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   logo: {
-    // About 180px wide. aspectRatio matches the image file (552 x 323), so the
-    // height follows the width and the logo is never stretched.
+    // A fixed 180 x 117 box. 117 = 180 × 476 / 733, the image file's own
+    // shape, so the logo fills the box without being stretched. Both sizes
+    // are set explicitly: with only a width, the image can fall back to its
+    // full 733px size and spill off the screen.
     width: 180,
-    aspectRatio: 552 / 323,
-    // The image has a thin see-through border (~5px at this size), so a small
-    // margin lines the drawing up with the tagline below.
-    marginLeft: 3,
+    height: 117,
+    alignSelf: 'center', // centred, and never stretched to full width
   },
   tagline: {
     ...text.small,
     fontSize: 16,
-    marginLeft: 8,
-    marginTop: 4,
+    textAlign: 'center', // centred under the logo
+    marginTop: 8,
   },
   card: {
     marginTop: 24,
