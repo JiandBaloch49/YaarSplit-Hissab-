@@ -9,12 +9,27 @@
 // the app bundle in a moment. Until they're ready we keep the splash screen
 // up, so text never flashes in the wrong font.
 //
+// Syncing: once the app is up, startSyncTriggers() (src/sync/triggers.js)
+// syncs on open, after every change, when the app comes back to the
+// foreground and when the internet returns. The app never waits for it.
+//
 // Navigation is a simple stack (React Navigation native-stack):
+//   SignUp  (first open only, until you sign up or tap "Not now")
 //   Groups  →  Group (Expenses / Balances / Members tabs)
 //             →  AddExpense                       (the "Add expense" button)
 //             →  ExpenseDetails  →  AddExpense    (tap a row, then "Edit")
 //             →  AddMoney                         (group fund: "Add money")
 //             →  Fund  →  AddMoney                (group fund: "View history")
+//             →  InviteMember                     (Members tab: "Invite")
+//             →  PersonHistory → ExpenseDetails   (Members tab: tap someone)
+//          →  Invitations  →  Invite               (the envelope: answer an invitation)
+//          →  Me  →  PersonHistory                 (the person icon)
+//
+// Invite links: a shared link opens the server's /join page, which opens
+// the app at yaarsplit://invite/<inviteId>?code=<code> (the "scheme" in
+// app.json). `linking` below turns that into the Invite screen, with the
+// Groups list underneath. (Expo Go can't open custom links; there, paste
+// the link on the Invitations screen instead.)
 //
 // <UndoProvider> draws the "Expense deleted. Undo" bar on top of every
 // screen (see src/components/UndoBar.js).
@@ -34,12 +49,20 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { initDatabase } from './src/db/database';
+import { shouldAskToSignUp } from './src/sync/account';
+import { startSyncTriggers } from './src/sync/triggers';
+import SignUpScreen from './src/screens/SignUpScreen';
 import GroupsScreen from './src/screens/GroupsScreen';
 import GroupScreen from './src/screens/GroupScreen';
 import AddExpenseScreen from './src/screens/AddExpenseScreen';
 import ExpenseDetailsScreen from './src/screens/ExpenseDetailsScreen';
 import FundScreen from './src/screens/FundScreen';
 import AddMoneyScreen from './src/screens/AddMoneyScreen';
+import InviteMemberScreen from './src/screens/InviteMemberScreen';
+import InvitationsScreen from './src/screens/InvitationsScreen';
+import InviteScreen from './src/screens/InviteScreen';
+import MeScreen from './src/screens/MeScreen';
+import PersonHistoryScreen from './src/screens/PersonHistoryScreen';
 import { UndoProvider } from './src/components/UndoBar';
 import { X } from './src/components/icons';
 import { colors, fonts } from './src/theme';
@@ -51,6 +74,22 @@ initDatabase();
 SplashScreen.preventAutoHideAsync();
 
 const Stack = createNativeStackNavigator();
+
+// Which links open which screen. "?code=..." becomes route.params.code
+// by itself. initialRouteName puts the Groups list under the Invite screen,
+// so "back" goes somewhere sensible when the app was opened by a link.
+const linking = {
+  prefixes: ['yaarsplit://'],
+  config: {
+    initialRouteName: 'Groups',
+    screens: {
+      Invite: 'invite/:inviteId',
+    },
+  },
+};
+
+// Header for plain screens on the grey background ("Me", "Invitations"...).
+const plainHeader = { headerStyle: { backgroundColor: colors.fog } };
 
 // Header for form screens ("Add expense", "Add money"): a centred title,
 // an ✕ to close, on a white background.
@@ -90,6 +129,9 @@ export default function App() {
     }
   }, [fontsLoaded, fontError]);
 
+  // Start syncing (and stop if the app is ever torn down).
+  useEffect(() => startSyncTriggers(), []);
+
   if (!fontsLoaded && !fontError) {
     return null; // splash screen is still showing
   }
@@ -97,9 +139,10 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <UndoProvider>
-        <NavigationContainer>
+        <NavigationContainer linking={linking}>
           <Stack.Navigator
-            initialRouteName="Groups"
+            // First open: the sign-up screen. After that: the groups.
+            initialRouteName={shouldAskToSignUp() ? 'SignUp' : 'Groups'}
             // Defaults for every screen's standard header.
             screenOptions={{
               headerShadowVisible: false,
@@ -108,7 +151,8 @@ export default function App() {
               contentStyle: { backgroundColor: colors.fog },
             }}
           >
-            {/* Groups and Group draw their own big titles, so no standard header. */}
+            {/* SignUp, Groups and Group draw their own titles, so no standard header. */}
+            <Stack.Screen name="SignUp" component={SignUpScreen} options={{ headerShown: false }} />
             <Stack.Screen name="Groups" component={GroupsScreen} options={{ headerShown: false }} />
             <Stack.Screen name="Group" component={GroupScreen} options={{ headerShown: false }} />
             <Stack.Screen
@@ -134,6 +178,16 @@ export default function App() {
               component={AddMoneyScreen}
               options={({ navigation }) => formOptions(navigation, 'Add money')}
             />
+            {/* Their titles are set on the screen itself ("Invite Nisar", "Bilal"). */}
+            <Stack.Screen
+              name="InviteMember"
+              component={InviteMemberScreen}
+              options={({ navigation }) => formOptions(navigation, 'Invite')}
+            />
+            <Stack.Screen name="PersonHistory" component={PersonHistoryScreen} options={{ title: '', ...plainHeader }} />
+            <Stack.Screen name="Invitations" component={InvitationsScreen} options={{ title: 'Invitations', ...plainHeader }} />
+            <Stack.Screen name="Invite" component={InviteScreen} options={{ title: 'Invitation', ...plainHeader }} />
+            <Stack.Screen name="Me" component={MeScreen} options={{ title: 'Me', ...plainHeader }} />
           </Stack.Navigator>
           <StatusBar style="dark" />
         </NavigationContainer>

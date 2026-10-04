@@ -15,6 +15,7 @@ import { requireAccount, requireMember } from '../auth.js';
 import { isId, isTimestamp, validateExpense } from '../validate.js';
 import { liveMemberIds } from '../groupData.js';
 import { HttpError } from '../errors.js';
+import { checkExpenseOwner } from '../rules.js';
 
 export function expenseRoutes() {
   const router = express.Router();
@@ -60,10 +61,19 @@ export function expenseRoutes() {
     const result = validateExpense(req.body, await liveMemberIds(req.group._id));
     if (!result.ok) throw new HttpError(400, 'The expense has problems.', result.errors);
 
+    const now = Date.now();
     await saveWithSeqs(req.group._id, 1, async ([seq], session) => {
       const { matchedCount } = await Expense.updateOne(
         { _id: expense._id, deleted: 0 }, // not if it was deleted meanwhile
-        { $set: { ...result.data, updated_at: Date.now(), updated_by: req.member._id, seq } },
+        {
+          $set: {
+            ...result.data,
+            edited_at: now, // see edited_at in models.js
+            updated_at: now,
+            updated_by: req.member._id,
+            seq,
+          },
+        },
         { session }
       );
       if (matchedCount === 0) throw new HttpError(404, 'That expense was deleted.');
@@ -105,10 +115,6 @@ async function loadChangeableExpense(req) {
     deleted: 0,
   }).lean();
   if (!expense) throw new HttpError(404, 'No such expense in this group.');
-
-  const isCreator = expense.created_by === req.member._id;
-  if (!isCreator && req.member.role !== 'admin') {
-    throw new HttpError(403, 'Only the person who added this expense, or an admin, can change it.');
-  }
+  checkExpenseOwner(expense, req.member);
   return expense;
 }

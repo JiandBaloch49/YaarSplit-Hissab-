@@ -3,12 +3,17 @@
 //   POST /accounts      { name, username } → account + a device token
 //   GET  /me            (token) my account and the groups I'm in
 //   GET  /me/invites    (token) invitations waiting for my answer
+//   GET  /accounts/search?q=nis   (token) find people to invite, by username
 
 import { randomUUID } from 'node:crypto';
 import express from 'express';
 import { Account, Device, Group, Invite, Member } from '../models.js';
 import { hashToken, makeToken, requireAccount } from '../auth.js';
 import { isNonEmptyString, isValidUsername, normalizeUsername } from '../validate.js';
+
+// GET /accounts/search: at least this many characters, at most this many results.
+const SEARCH_MIN = 2;
+const SEARCH_MAX = 10;
 import { HttpError } from '../errors.js';
 import { publicInvite } from './invites.js';
 
@@ -17,7 +22,10 @@ export function publicAccount(account) {
   return { id: account._id, name: account.name, username: account.username };
 }
 
-/** limits.account: rate limiter for POST /accounts (per IP). */
+/**
+ * limits.account: rate limiter for POST /accounts (per IP).
+ * limits.search:  rate limiter for GET /accounts/search (per account).
+ */
 export function accountRoutes(limits) {
   const router = express.Router();
 
@@ -72,6 +80,29 @@ export function accountRoutes(limits) {
     });
 
     res.status(201).json({ account: publicAccount(account), token, device_id: deviceId });
+  });
+
+  // --- GET /accounts/search?q=nis: find someone to invite ---
+  // Usernames STARTING with q ("@" and capitals are fine), at most 10,
+  // shortest first so an exact match comes out on top. Only name and
+  // username are shown. Needs at least 2 characters, so nobody can list
+  // every account, and it's rate limited per account.
+  // Reply: { accounts: [{ id, name, username }] }
+  router.get('/accounts/search', requireAccount, limits.search, async (req, res) => {
+    const q = normalizeUsername(req.query.q);
+    // Usernames are only letters, digits and "_", so anything else can't
+    // match — and keeping it out means q is safe inside the regex below.
+    if (typeof q !== 'string' || q.length < SEARCH_MIN || !/^[a-z0-9_]+$/.test(q)) {
+      return res.json({ accounts: [] });
+    }
+    const found = await Account.find({ username: { $regex: `^${q}` }, deleted: 0 })
+      .limit(50)
+      .lean();
+    const accounts = found
+      .sort((a, b) => a.username.length - b.username.length || a.username.localeCompare(b.username))
+      .slice(0, SEARCH_MAX)
+      .map(publicAccount);
+    res.json({ accounts });
   });
 
   // --- GET /me: my account and my groups ---

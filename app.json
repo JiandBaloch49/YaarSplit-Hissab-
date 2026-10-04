@@ -2,6 +2,7 @@
   "expo": {
     "name": "YaarSplit",
     "slug": "yaarsplit",
+    "scheme": "yaarsplit",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/yaarsplit-icon.png",
@@ -32,7 +33,8 @@
           "resizeMode": "contain",
           "imageWidth": 200
         }
-      ]
+      ],
+      "expo-secure-store"
     ]
   }
 }

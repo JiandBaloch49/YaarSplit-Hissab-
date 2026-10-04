@@ -88,6 +88,9 @@ describe('expenses: only the creator or an admin can change them', () => {
     );
     assert.equal(res.body.expense.updated_by, ids.B);
     assert.ok(res.body.expense.seq > made.body.expense.seq);
+    // A new expense was never edited; the edit sets edited_at.
+    assert.equal(made.body.expense.edited_at, null);
+    assert.equal(typeof res.body.expense.edited_at, 'number');
   });
 
   test("an admin can edit and delete someone else's expense", async () => {

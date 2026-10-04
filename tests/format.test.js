@@ -15,6 +15,14 @@ import {
   groupByDay,
   describeExpense,
   describeGroup,
+  describePayment,
+  describePaymentStatus,
+  paymentStatusLabel,
+  formatTime,
+  formatWhen,
+  describeAuthors,
+  describeRemaining,
+  describeExpiry,
 } from '../src/logic/format.js';
 
 test('formatRupees adds commas and the Rs prefix', () => {
@@ -83,4 +91,69 @@ test('describeExpense and describeGroup', () => {
   assert.equal(describeExpense(['Hammal'], ['A', 'B', 'C', 'D'], true), 'Paid from fund, for 4');
   assert.equal(describeGroup(4, 8500), '4 friends, Rs 8,500 spent');
   assert.equal(describeGroup(1, 0), '1 friend, Rs 0 spent');
+});
+
+test('describePayment and describePaymentStatus', () => {
+  const nameOf = (id) => ({ a: 'Ali', b: 'Bilal' })[id];
+  const pay = (fromId, toId, type, status = 'confirmed') => ({ fromId, toId, type, status });
+  assert.equal(describePayment(pay('b', 'a', 'settlement'), nameOf), 'Bilal paid Ali');
+  assert.equal(describePayment(pay('b', 'a', 'contribution'), nameOf), 'Bilal put money in the fund');
+  assert.equal(describePayment(pay('a', 'b', 'return'), nameOf), 'Ali gave Bilal fund money back');
+  assert.equal(describePayment(pay('a', 'a', 'return'), nameOf), 'Ali kept leftover fund money');
+
+  assert.equal(describePaymentStatus(pay('b', 'a', 'settlement', 'pending'), nameOf), 'Waiting for Ali to confirm');
+  assert.equal(describePaymentStatus(pay('b', 'a', 'settlement', 'rejected'), nameOf), 'Ali said they didn’t get it');
+  assert.equal(describePaymentStatus(pay('b', 'a', 'settlement', 'cancelled'), nameOf), 'Cancelled');
+  assert.equal(describePaymentStatus(pay('b', 'a', 'settlement'), nameOf), '');
+});
+
+test('describePaymentStatus: says clearly when the receiver is not on YaarSplit', () => {
+  const nameOf = (id) => ({ a: 'Ali', b: 'Bilal' })[id];
+  const pending = { fromId: 'b', toId: 'a', status: 'pending', type: 'settlement' };
+  assert.equal(
+    describePaymentStatus(pending, nameOf, false),
+    'Ali isn’t on YaarSplit yet, so an admin confirms'
+  );
+  assert.equal(paymentStatusLabel('rejected'), 'Rejected');
+});
+
+test('formatTime and formatWhen: "3:20 PM", and the date when not today', () => {
+  const at = (h, m, day = 28) => new Date(2026, 8, day, h, m).getTime(); // September
+  assert.equal(formatTime(at(15, 20)), '3:20 PM');
+  assert.equal(formatTime(at(0, 5)), '12:05 AM');
+  assert.equal(formatTime(at(12, 0)), '12:00 PM');
+  assert.equal(formatWhen(at(15, 20), at(18, 0)), '3:20 PM');
+  assert.equal(formatWhen(at(15, 20, 27), at(18, 0)), '27 Sep, 3:20 PM');
+});
+
+test('describeAuthors: "Added by" and "Edited by", only when known', () => {
+  const nameOf = (id) => ({ b: 'Bilal', a: 'Ali' })[id];
+  const now = new Date(2026, 8, 28, 18, 0).getTime();
+  const editedAt = new Date(2026, 8, 28, 15, 20).getTime();
+  assert.deepEqual(describeAuthors({ created_by: 'b', updated_by: 'b', edited_at: null }, nameOf, now), {
+    added: 'Added by Bilal',
+    edited: null,
+  });
+  assert.deepEqual(describeAuthors({ created_by: 'b', updated_by: 'a', edited_at: editedAt }, nameOf, now), {
+    added: 'Added by Bilal',
+    edited: 'Edited by Ali, 3:20 PM',
+  });
+  // A group that only lives on this phone: nobody's recorded.
+  assert.deepEqual(describeAuthors({ created_by: null, updated_by: null, edited_at: editedAt }, nameOf, now), {
+    added: null,
+    edited: 'Edited 3:20 PM',
+  });
+});
+
+test('describeRemaining and describeExpiry', () => {
+  assert.equal(describeRemaining(300, 'Nisar'), 'Nisar owes you Rs 300');
+  assert.equal(describeRemaining(-1200, 'Nisar'), 'You owe Nisar Rs 1,200');
+  assert.equal(describeRemaining(0, 'Nisar'), 'You’re even');
+
+  const day = 24 * 60 * 60 * 1000;
+  const now = 1_000_000_000_000;
+  assert.equal(describeExpiry(now + 6.5 * day, now), 'Expires in 6 days');
+  assert.equal(describeExpiry(now + 1.2 * day, now), 'Expires tomorrow');
+  assert.equal(describeExpiry(now + 3600 * 1000, now), 'Expires today');
+  assert.equal(describeExpiry(now - 1, now), 'Expired');
 });

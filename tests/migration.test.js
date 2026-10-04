@@ -1,12 +1,13 @@
 // migration.test.js — a phone that already has the OLD tables (from before
-// the group fund) gets the new columns added on startup, and its existing
-// rows keep working. Runs the real src/db code on an in-memory SQLite.
+// the group fund and before sync) gets the new columns added on startup,
+// and its existing rows keep working. Runs the real src/db code on an in-memory SQLite.
 // Run with:  npm test
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getDb, initDatabase } from '../src/db/database.js';
 import { listExpenses, listPayments } from '../src/db/queries.js';
+import { computeBalances } from '../src/logic/split.js';
 
 // The tables exactly as the app created them before the group fund
 // (no fund_holder_id, from_fund or type columns).
@@ -62,6 +63,31 @@ test('migration: old tables get the new columns, old rows get the defaults', () 
   assert.equal(listExpenses('g')[0].from_fund, 0);
   assert.equal(listPayments('g')[0].type, 'settlement');
   assert.equal(getDb().getFirstSync('SELECT fund_holder_id FROM groups').fund_holder_id, null);
+  // Old expenses were never edited (as far as "Edited by" is concerned).
+  assert.equal(listExpenses('g')[0].edited_at, null);
+});
+
+test('migration: sync columns are added; old payments become confirmed and still count', () => {
+  for (const table of ['groups', 'members', 'expenses', 'payments']) {
+    assert.ok(columnsOf(table).includes('created_by'), `${table}.created_by`);
+    assert.ok(columnsOf(table).includes('updated_by'), `${table}.updated_by`);
+  }
+  for (const column of ['status', 'confirmed_at', 'confirmed_by']) {
+    assert.ok(columnsOf('payments').includes(column), `payments.${column}`);
+  }
+  for (const column of ['online', 'last_seq', 'my_member_id', 'simplify_debts']) {
+    assert.ok(columnsOf('groups').includes(column), `groups.${column}`);
+  }
+
+  // The old payment (b paid a 100) is confirmed, so it still moves money.
+  const [payment] = listPayments('g');
+  assert.equal(payment.status, 'confirmed');
+  const balances = computeBalances([{ id: 'a' }, { id: 'b' }], listExpenses('g'), [payment]);
+  assert.deepEqual(balances, { a: -100, b: 100 });
+
+  // The old group only lives on this phone until it's put online.
+  const group = getDb().getFirstSync('SELECT online, last_seq, simplify_debts FROM groups');
+  assert.deepEqual(group, { online: 0, last_seq: 0, simplify_debts: 1 });
 });
 
 test('migration: running startup again changes nothing', () => {

@@ -17,14 +17,16 @@
 //   - Only pending payments can be confirmed, rejected or cancelled.
 //   - Any amount above 0 is fine (partial payments).
 // Only confirmed payments count in balances (computeBalances in split.js).
+// The rules themselves live in rules.js (phones' sync pushes use them too).
 
 import express from 'express';
-import { Member, Payment, toApp } from '../models.js';
+import { Payment, toApp } from '../models.js';
 import { saveWithSeqs } from '../seq.js';
 import { requireAccount, requireMember } from '../auth.js';
 import { isId, isTimestamp, validatePayment } from '../validate.js';
 import { liveMemberIds } from '../groupData.js';
 import { HttpError } from '../errors.js';
+import { answerChanges, checkFundRules, initialPaymentStatus } from '../rules.js';
 
 export function paymentRoutes() {
   const router = express.Router();
@@ -43,12 +45,9 @@ export function paymentRoutes() {
     const payment = result.data;
     checkFundRules(payment, req.group);
 
-    // You can only record money YOU gave or YOU got.
-    const isPayer = payment.from_member_id === req.member._id;
-    const isReceiver = payment.to_member_id === req.member._id;
-    if (!isPayer && !isReceiver) {
-      throw new HttpError(403, 'You can only record a payment you made or received.');
-    }
+    // You can only record money YOU gave or YOU got. The receiver saying
+    // "X paid me" needs nobody else's word, so it's confirmed at once.
+    const status = initialPaymentStatus(payment, req.member);
     if (await Payment.exists({ _id: id })) throw new HttpError(409, 'This payment was already added.');
 
     const now = Date.now();
@@ -56,10 +55,9 @@ export function paymentRoutes() {
       _id: id,
       group_id: req.group._id,
       ...payment,
-      // The receiver saying "X paid me" needs nobody else's word.
-      status: isReceiver ? 'confirmed' : 'pending',
-      confirmed_at: isReceiver ? now : null,
-      confirmed_by: isReceiver ? 'receiver' : null,
+      status,
+      confirmed_at: status === 'confirmed' ? now : null,
+      confirmed_by: status === 'confirmed' ? 'receiver' : null,
       created_at: isTimestamp(req.body.created_at) ? req.body.created_at : now,
       updated_at: now,
       deleted: 0,
@@ -85,24 +83,10 @@ export function paymentRoutes() {
         deleted: 0,
       }).lean();
       if (!payment) throw new HttpError(404, 'No such payment in this group.');
-      if (payment.status !== 'pending') {
-        throw new HttpError(409, `This payment is already ${payment.status}.`);
-      }
 
+      // Pending? Allowed for me? (See answerChanges in rules.js.)
       const now = Date.now();
-      let changes;
-      if (action === 'cancel') {
-        if (payment.from_member_id !== req.member._id) {
-          throw new HttpError(403, 'Only the person who paid can cancel this payment.');
-        }
-        changes = { status: 'cancelled' };
-      } else {
-        const by = await whoMayAnswer(payment, req.member);
-        changes =
-          action === 'confirm'
-            ? { status: 'confirmed', confirmed_at: now, confirmed_by: by }
-            : { status: 'rejected' };
-      }
+      const changes = await answerChanges(payment, action, req.member, now);
 
       await saveWithSeqs(req.group._id, 1, async ([seq], session) => {
         // status: 'pending' in the filter: if two answers race (say the payer
@@ -120,44 +104,4 @@ export function paymentRoutes() {
   }
 
   return router;
-}
-
-/**
- * May `me` confirm or reject this payment? Returns how they'd confirm it:
- *   'receiver' — I am the receiver
- *   'admin'    — the receiver has no account, and I'm an admin
- * Otherwise throws 403.
- */
-async function whoMayAnswer(payment, me) {
-  const receiver = await Member.findOne({ _id: payment.to_member_id, group_id: payment.group_id }).lean();
-  const receiverHasAccount = Boolean(receiver && receiver.deleted === 0 && receiver.account_id);
-
-  if (receiverHasAccount) {
-    if (receiver._id === me._id) return 'receiver';
-    throw new HttpError(403, `Only ${receiver.name} can confirm or reject a payment to them.`);
-  }
-  if (me.role === 'admin') return 'admin';
-  throw new HttpError(403, 'The receiver has no account yet, so only an admin can confirm or reject this.');
-}
-
-/**
- * The same payment rules the app's addPayment() has (src/db/queries.js):
- *   settlement   — can't pay yourself
- *   contribution — must go TO the fund holder
- *   return       — must come FROM the fund holder
- */
-function checkFundRules(payment, group) {
-  const { type, from_member_id: fromId, to_member_id: toId } = payment;
-  if (type === 'settlement') {
-    if (fromId === toId) throw new HttpError(400, 'Someone can’t pay themselves.');
-    return;
-  }
-  const holderId = group.fund_holder_id;
-  if (!holderId) throw new HttpError(400, 'This group has no fund.');
-  if (type === 'contribution' && toId !== holderId) {
-    throw new HttpError(400, 'Money for the fund must go to the fund holder.');
-  }
-  if (type === 'return' && fromId !== holderId) {
-    throw new HttpError(400, 'Only the fund holder can hand back fund money.');
-  }
 }

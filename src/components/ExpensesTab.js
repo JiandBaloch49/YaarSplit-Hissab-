@@ -17,6 +17,7 @@
 //   onAddExpense   called when "Add expense" is tapped
 //   onOpenExpense  called with the expense when its row is tapped (opens details)
 //   header         optional element shown above the expenses (FundCard)
+//   refreshControl pull-to-refresh (a <RefreshControl>)
 
 import { Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -34,6 +35,7 @@ export default function ExpensesTab({
   onAddExpense,
   onOpenExpense,
   header,
+  refreshControl,
 }) {
   const insets = useSafeAreaInsets(); // space taken by the phone's home bar
   const { isShowing: undoShowing } = useUndo();
@@ -45,6 +47,7 @@ export default function ExpensesTab({
       <SectionList
         sections={groupByDay(expenses)}
         keyExtractor={(expense) => expense.id}
+        refreshControl={refreshControl}
         // Room at the bottom so the floating button never hides the last row.
         contentContainerStyle={[styles.list, { paddingBottom: buttonBottom + 80 }]}
         stickySectionHeadersEnabled={false}

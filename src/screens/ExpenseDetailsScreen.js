@@ -11,13 +11,19 @@
 // For a group-fund expense, "Paid by" shows how much came out of the fund
 // and how much the holder added from their own pocket (if the fund ran out).
 //
+// Under the date: "Added by Bilal" and "Edited by Bilal, 3:20 PM" (once
+// it's been edited). Groups that only live on this phone don't know who
+// added what, so there it's just "Edited 3:20 PM".
+//
 // "Edit" opens the expense form pre-filled. "Delete" soft-deletes it right
-// away and shows "Expense deleted. Undo" for 5 seconds.
+// away and shows "Expense deleted. Undo" for 5 seconds. In a shared group
+// only the person who added it, or an admin, can change it — for everyone
+// else the two buttons are replaced by a line saying who can.
 //
 // Route params: groupId, expenseId
 
 import { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AppButton from '../components/AppButton';
@@ -27,6 +33,7 @@ import { useUndo } from '../components/UndoBar';
 import { Pencil, Trash } from '../components/icons';
 import {
   deleteExpense,
+  expenseChangeRefusal,
   getExpense,
   getGroup,
   listExpenses,
@@ -36,7 +43,7 @@ import {
   restoreExpense,
 } from '../db/queries';
 import { fundSummary } from '../logic/split';
-import { categoryLabel, formatDay, formatRupees } from '../logic/format';
+import { categoryLabel, describeAuthors, formatDay, formatRupees } from '../logic/format';
 import { colors, fonts, money, text } from '../theme';
 
 /**
@@ -47,9 +54,10 @@ function loadDetails(groupId, expenseId) {
   const expense = getExpense(expenseId);
   if (!expense) return null;
 
-  // Names for everyone in the expense — including people who have since
-  // been removed from the group, marked "(removed)".
+  // Names for everyone in the expense, and whoever added / edited it —
+  // including people who have since been removed, marked "(removed)".
   const usedIds = [...expense.payers, ...expense.participants].map((p) => p.member_id);
+  for (const id of [expense.created_by, expense.updated_by]) if (id) usedIds.push(id);
   const names = {};
   for (const m of listMembersByIds(groupId, [...new Set(usedIds)])) {
     names[m.id] = m.deleted ? `${m.name} (removed)` : m.name;
@@ -68,7 +76,10 @@ function loadDetails(groupId, expenseId) {
     fundPart = fund.history.find((h) => h.kind === 'out' && h.id === expense.id) || null;
   }
 
-  return { expense, names, didntJoin, fundPart };
+  // null if I may edit / delete it, otherwise why not.
+  const refusal = expenseChangeRefusal(expense);
+
+  return { expense, names, didntJoin, fundPart, refusal };
 }
 
 export default function ExpenseDetailsScreen({ route, navigation }) {
@@ -92,14 +103,19 @@ export default function ExpenseDetailsScreen({ route, navigation }) {
     );
   }
 
-  const { expense, names, didntJoin, fundPart } = details;
+  const { expense, names, didntJoin, fundPart, refusal } = details;
   const nameOf = (id) => names[id] || 'Removed member';
   const title = expense.description || categoryLabel(expense.category);
+  const authors = describeAuthors(expense, nameOf);
 
   // Deletes straight away — no "Are you sure?". A mistake is fixed with the
   // Undo bar instead, which is quicker than confirming every time.
   function handleDelete() {
-    deleteExpense(expenseId); // soft delete: deleted = 1, synced = 0
+    const result = deleteExpense(expenseId); // soft delete: deleted = 1, synced = 0
+    if (!result.ok) {
+      Alert.alert('Can’t delete this expense', result.errors.join('\n'));
+      return;
+    }
     // The bar lives above all screens, so it stays after we go back.
     showUndo('Expense deleted.', () => restoreExpense(expenseId));
     navigation.goBack();
@@ -120,6 +136,8 @@ export default function ExpenseDetailsScreen({ route, navigation }) {
             <Text style={styles.meta}>
               {categoryLabel(expense.category)} · {formatDay(expense.created_at)}
             </Text>
+            {authors.added && <Text style={styles.meta}>{authors.added}</Text>}
+            {authors.edited && <Text style={styles.meta}>{authors.edited}</Text>}
           </View>
         </Card>
 
@@ -191,21 +209,30 @@ export default function ExpenseDetailsScreen({ route, navigation }) {
         )}
       </ScrollView>
 
-      {/* --- Edit / Delete, always visible at the bottom --- */}
+      {/* --- Edit / Delete, always visible at the bottom (or who may change it) --- */}
       <View style={[styles.actions, { paddingBottom: insets.bottom + 16 }]}>
-        <AppButton
-          title="Edit"
-          icon={Pencil}
-          onPress={() => navigation.navigate('AddExpense', { groupId, expenseId })}
-          style={styles.actionButton}
-        />
-        <AppButton
-          title="Delete"
-          icon={Trash}
-          variant="danger"
-          onPress={handleDelete}
-          style={styles.actionButton}
-        />
+        {refusal ? (
+          <Text style={styles.refusal}>
+            Only {expense.created_by ? nameOf(expense.created_by) : 'the person who added it'} or a group
+            admin can edit or delete this expense.
+          </Text>
+        ) : (
+          <>
+            <AppButton
+              title="Edit"
+              icon={Pencil}
+              onPress={() => navigation.navigate('AddExpense', { groupId, expenseId })}
+              style={styles.actionButton}
+            />
+            <AppButton
+              title="Delete"
+              icon={Trash}
+              variant="danger"
+              onPress={handleDelete}
+              style={styles.actionButton}
+            />
+          </>
+        )}
       </View>
     </View>
   );
@@ -313,5 +340,11 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     flex: 1,
+  },
+  refusal: {
+    ...text.small,
+    flex: 1,
+    textAlign: 'center',
+    paddingVertical: 8,
   },
 });

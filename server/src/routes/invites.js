@@ -12,9 +12,11 @@
 //   POST /groups/:groupId/invites        (admin) { member_id, username? }
 //   GET  /groups/:groupId/invites        (admin) pending invites
 //   POST /invites/:inviteId/regenerate   (admin) new code for a link invite
+//   POST /invites/:inviteId/revoke       (admin) cancel a pending invite
 //   GET  /invites/:inviteId?code=...     (token) look before accepting
 //   POST /invites/:inviteId/accept       (token) { code? }
 //   POST /invites/:inviteId/decline      (token) { code? }
+//   GET  /join/:inviteId                 (anyone) the web page a shared link opens
 //
 // Making invites and answering them are rate limited per account.
 
@@ -109,13 +111,23 @@ export function inviteRoutes(limits) {
   );
 
   // --- GET /groups/:groupId/invites  (admin) ---
-  // Reply: { invites: [...] } — pending ones, each with `expired: true/false`.
+  // Reply: { invites: [...] } — pending ones, each with `expired: true/false`
+  // and, for username invites, the invited `username` ("Invited @nisar").
   router.get('/groups/:groupId/invites', requireAccount, requireMember, requireAdmin, async (req, res) => {
     const invites = await Invite.find({ group_id: req.group._id, status: 'pending', deleted: 0 })
       .sort({ created_at: 1 })
       .lean();
+    const accountIds = invites.map((i) => i.account_id).filter(Boolean);
+    const accounts = await Account.find({ _id: { $in: accountIds } }).lean();
+    const usernameOf = new Map(accounts.map((a) => [a._id, a.username]));
     const now = Date.now();
-    res.json({ invites: invites.map((i) => ({ ...publicInvite(i), expired: i.expires_at <= now })) });
+    res.json({
+      invites: invites.map((i) => ({
+        ...publicInvite(i),
+        username: usernameOf.get(i.account_id) ?? null,
+        expired: i.expires_at <= now,
+      })),
+    });
   });
 
   // --- POST /invites/:inviteId/regenerate  (admin of that group) ---
@@ -144,19 +156,60 @@ export function inviteRoutes(limits) {
     res.json({ invite: publicInvite(updated), code });
   });
 
+  // --- POST /invites/:inviteId/revoke  (admin of that group) ---
+  // "Cancel invite": the invite (username or link) stops working at once.
+  // Reply: { invite }   409 if it was already answered.
+  router.post('/invites/:inviteId/revoke', requireAccount, limits.invite, async (req, res) => {
+    const invite = await Invite.findOne({ _id: req.params.inviteId, deleted: 0 }).lean();
+    if (!invite) throw new HttpError(404, 'No such invite.');
+
+    const me = await Member.findOne({ group_id: invite.group_id, account_id: req.account._id, deleted: 0 }).lean();
+    if (!me || me.role !== 'admin') throw new HttpError(403, 'Only a group admin can do that.');
+
+    // status: 'pending' in the filter: an invite accepted a moment ago
+    // stays accepted.
+    const updated = await Invite.findOneAndUpdate(
+      { _id: invite._id, status: 'pending' },
+      { $set: { status: 'revoked', updated_at: Date.now() } },
+      { returnDocument: 'after' }
+    ).lean();
+    if (!updated) throw new HttpError(409, `This invite was already ${invite.status}.`);
+
+    res.json({ invite: publicInvite(updated) });
+  });
+
   // --- GET /invites/:inviteId?code=...  (token) ---
   // Look at an invite before answering: "Join Trip as Nisar?"
-  // Reply: { invite, group: { id, name }, member: { id, name } }
+  // Reply: { invite, group: { id, name, members }, member: { id, name },
+  //          invited_by_name }
+  //   group.members: [{ name, joined, invited }] — who is in the group,
+  //   whether they're on YaarSplit (joined = an account is linked), and
+  //   which slot this invite is for. Only names: the money stays private
+  //   until you've joined.
   router.get('/invites/:inviteId', requireAccount, limits.answer, async (req, res) => {
     const invite = await loadMyInvite(req, req.query.code);
-    const [group, member] = await Promise.all([
+    const [group, slots] = await Promise.all([
       Group.findById(invite.group_id).lean(),
-      Member.findById(invite.member_id).lean(),
+      Member.find({ group_id: invite.group_id, deleted: 0 }).sort({ created_at: 1 }).lean(),
     ]);
+    if (!group || group.deleted) throw new HttpError(404, 'That group no longer exists.');
+    // The slot the invite is for (looked up even if it was removed since,
+    // so the screen can still say who it was for).
+    const member = slots.find((m) => m._id === invite.member_id) ?? (await Member.findById(invite.member_id).lean());
+    const invitedBy = await Member.findById(invite.created_by).lean();
     res.json({
       invite: { ...publicInvite(invite), expired: invite.expires_at <= Date.now() },
-      group: { id: group._id, name: group.name },
+      group: {
+        id: group._id,
+        name: group.name,
+        members: slots.map((m) => ({
+          name: m.name,
+          joined: Boolean(m.account_id),
+          invited: m._id === invite.member_id,
+        })),
+      },
       member: { id: member._id, name: member.name },
+      invited_by_name: invitedBy?.name ?? null,
     });
   });
 
@@ -233,6 +286,23 @@ export function inviteRoutes(limits) {
     res.json({ invite: publicInvite(updated) });
   });
 
+  // --- GET /join/:inviteId  (anyone, no token) ---
+  // A shared invite link looks like  https://<server>/join/<inviteId>#<code>
+  // WhatsApp only makes http(s) links tappable, so the link points here, and
+  // this small page hands over to the app (yaarsplit://invite/...).
+  //
+  // The code sits after "#", which browsers never send to the server: the
+  // server doesn't see it, log it, or need it here. The page's own script
+  // reads it and builds the app link. Nothing about the group is shown, so
+  // the page gives nothing away to someone who only knows the invite id.
+  router.get('/join/:inviteId', (req, res) => {
+    const inviteId = req.params.inviteId;
+    // Ids are UUIDs; anything else is not an invite (and keeps odd
+    // characters out of the page below).
+    if (!/^[0-9a-f-]{36}$/i.test(inviteId)) return res.status(404).type('text').send('Not found.');
+    res.type('html').send(joinPage(inviteId));
+  });
+
   return router;
 }
 
@@ -264,4 +334,43 @@ function checkStillOpen(invite) {
   if (invite.expires_at <= Date.now()) {
     throw new HttpError(410, 'This invite has expired. Ask an admin for a new one.');
   }
+}
+
+/**
+ * The web page for GET /join/:inviteId. It tries to open the app straight
+ * away, and also shows a button (some browsers only open apps on a tap) and
+ * what to do if the app isn't installed. `inviteId` was checked to be a
+ * UUID, so it's safe to put into the page.
+ */
+function joinPage(inviteId) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Join a group on YaarSplit</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #EDF0F5; color: #17223B;
+         margin: 0; padding: 32px 16px; text-align: center; }
+  .card { background: #fff; border-radius: 24px; padding: 28px 20px; max-width: 420px; margin: 0 auto; }
+  a.button { display: inline-block; background: #17223B; color: #fff; text-decoration: none;
+             padding: 16px 28px; border-radius: 18px; font-weight: 600; margin: 16px 0; }
+  p { line-height: 1.5; color: #566074; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>You’re invited to a YaarSplit group</h1>
+  <a class="button" id="open" href="#">Open in YaarSplit</a>
+  <p>Nothing happens? Install YaarSplit, then open it, go to
+     <b>Invitations</b> and paste this page’s link.</p>
+</div>
+<script>
+  var code = location.hash.slice(1);
+  var link = 'yaarsplit://invite/${inviteId}?code=' + encodeURIComponent(code);
+  document.getElementById('open').href = link;
+  location.href = link;
+</script>
+</body>
+</html>`;
 }

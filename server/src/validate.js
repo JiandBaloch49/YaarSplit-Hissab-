@@ -232,7 +232,10 @@ export function validateGroupUpload(body) {
     if (!checkBase(expense, where, errors)) return;
     if (expense.group_id !== groupId) errors.push(`${where}: belongs to a different group.`);
     const fields = checkExpenseFields(expense, memberIds, where, errors);
-    if (fields) cleanExpenses.push({ ...pickBase(expense), group_id: groupId, ...fields });
+    // edited_at: when it was edited on the phone before going online (or
+    // null). Anything that isn't a timestamp is simply dropped.
+    const editedAt = isTimestamp(expense.edited_at) ? expense.edited_at : null;
+    if (fields) cleanExpenses.push({ ...pickBase(expense), group_id: groupId, ...fields, edited_at: editedAt });
   });
 
   // --- Payments ---

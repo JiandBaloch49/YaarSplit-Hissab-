@@ -63,15 +63,12 @@ export const PAYMENT_STATUSES = ['pending', 'confirmed', 'rejected', 'cancelled'
 
 /**
  * Does this payment count as money that really changed hands?
- * Only confirmed ones do.
- *
- * A payment with NO status at all also counts: those are rows saved on a
- * phone before payments had a status (the app gets the column in phase 6b).
- * The server always stores a status, so this never lets a pending payment
- * through there.
+ * Only confirmed ones do. A payment with no status doesn't count either:
+ * every payment has one, on the phone (old rows were given 'confirmed' when
+ * the column was added) and on the server.
  */
 export function isConfirmed(payment) {
-  return (payment.status ?? 'confirmed') === 'confirmed';
+  return payment.status === 'confirmed';
 }
 
 // Helper: is this a whole number of rupees, 0 or more?
@@ -509,6 +506,35 @@ export function historyBetween(aId, bId, expenses, payments) {
     remaining += change;
     return { kind, id: item.id, created_at: item.created_at, item, change, remaining };
   });
+}
+
+/**
+ * The settle-up list a group shows, following its "Simplify debts" setting:
+ *   simplify truthy (1) → settleUp(balances): the fewest payments
+ *   simplify falsy  (0) → pairwiseDebts(): each person pays back exactly
+ *                         the people they owe
+ * Either way, everyone ends up at exactly 0.
+ * Returns [{ fromId, toId, amount }].
+ */
+export function settleUpFor(simplify, balances, expenses, payments) {
+  return simplify ? settleUp(balances) : pairwiseDebts(expenses, payments);
+}
+
+/**
+ * Split a settle-up list into the parts that are about one person ("me"):
+ *   iOwe      [{ memberId, amount }]  people I should pay
+ *   owedToMe  [{ memberId, amount }]  people who should pay me
+ * Biggest amounts first. Transfers between other people are left out.
+ */
+export function myDebts(meId, transfers) {
+  const iOwe = [];
+  const owedToMe = [];
+  for (const t of transfers) {
+    if (t.fromId === meId) iOwe.push({ memberId: t.toId, amount: t.amount });
+    if (t.toId === meId) owedToMe.push({ memberId: t.fromId, amount: t.amount });
+  }
+  const biggestFirst = (a, b) => b.amount - a.amount;
+  return { iOwe: iOwe.sort(biggestFirst), owedToMe: owedToMe.sort(biggestFirst) };
 }
 
 /**

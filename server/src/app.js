@@ -5,11 +5,12 @@
 // in-memory MongoDB. Keeping them apart is what makes the tests possible.
 //
 // Where the endpoints live:
-//   routes/accounts.js   POST /accounts, GET /me, GET /me/invites
+//   routes/accounts.js   POST /accounts, GET /me, GET /me/invites, username search
 //   routes/groups.js     upload, /changes, settings, roles, settle-up, history
-//   routes/invites.js    inviting, accepting, declining
+//   routes/invites.js    inviting, accepting, declining, cancelling, /join page
 //   routes/expenses.js   add / edit / delete expenses
 //   routes/payments.js   record / confirm / reject / cancel payments
+//   routes/push.js       a phone's sync upload: many changed rows at once
 // The server README has the full table.
 //
 // Every reply is JSON. Errors look like { error: '...' }, and failed checks
@@ -23,6 +24,7 @@ import { groupRoutes } from './routes/groups.js';
 import { inviteRoutes } from './routes/invites.js';
 import { expenseRoutes } from './routes/expenses.js';
 import { paymentRoutes } from './routes/payments.js';
+import { pushRoutes } from './routes/push.js';
 
 /**
  * Build the app.
@@ -51,6 +53,7 @@ export function createApp(options = {}) {
     account: rateLimit({ max, windowMs }),
     invite: rateLimit({ max, windowMs, key: byAccount }),
     answer: rateLimit({ max, windowMs, key: byAccount }),
+    search: rateLimit({ max: max * 6, windowMs, key: byAccount }),
   };
 
   // --- Health check: Render (and you) can open this to see the server is up.
@@ -63,6 +66,7 @@ export function createApp(options = {}) {
   app.use(inviteRoutes(limits));
   app.use(expenseRoutes());
   app.use(paymentRoutes());
+  app.use(pushRoutes());
 
   // --- Anything else: 404 ---
   app.use((req, res) => {

@@ -16,6 +16,8 @@ import {
   summarizeGroup,
   pairwiseDebts,
   historyBetween,
+  settleUpFor,
+  myDebts,
   fundSummary,
 } from '../src/logic/split.js';
 
@@ -90,7 +92,7 @@ test('three meals: settleUp', () => {
 });
 
 test('payment: D paid B 350 reduces both balances', () => {
-  const payments = [{ fromId: 'D', toId: 'B', amount: 350 }];
+  const payments = [{ fromId: 'D', toId: 'B', amount: 350, status: 'confirmed' }];
   const balances = computeBalances(members, threeMeals(), payments);
   // Before the payment: B +400, D -350.
   assert.deepEqual(balances, { A: 200, B: 50, C: -250, D: 0 });
@@ -325,9 +327,9 @@ test('summarizeGroup: three meals', () => {
 
 test('summarizeGroup: payments reduce toSettle but not totalSpent', () => {
   const payments = [
-    { fromId: 'D', toId: 'B', amount: 350 },
-    { fromId: 'C', toId: 'A', amount: 200 },
-    { fromId: 'C', toId: 'B', amount: 50 },
+    { fromId: 'D', toId: 'B', amount: 350, status: 'confirmed' },
+    { fromId: 'C', toId: 'A', amount: 200, status: 'confirmed' },
+    { fromId: 'C', toId: 'B', amount: 50, status: 'confirmed' },
   ];
   const summary = summarizeGroup(members, threeMeals(), payments);
   assert.deepEqual(summary, { memberCount: 4, totalSpent: 1700, toSettle: 0 });
@@ -348,9 +350,11 @@ test('computeBalances: only confirmed payments count', () => {
   });
 });
 
-test('computeBalances: a payment with no status (old phone row) counts', () => {
+test('computeBalances: a payment with no status does NOT count', () => {
+  // Every real payment has a status (old phone rows got 'confirmed' when the
+  // column was added), so a missing one is treated like "not confirmed".
   const balances = computeBalances(members, threeMeals(), [{ fromId: 'D', toId: 'B', amount: 350 }]);
-  assert.equal(balances.D, 0);
+  assert.equal(balances.D, -350);
 });
 
 test('computeBalances: partial payments add up', () => {
@@ -467,4 +471,36 @@ test('historyBetween: seen from the other side, the numbers flip', () => {
     historyBetween('B', 'A', expenses, []).map((s) => [s.change, s.remaining]),
     [[-200, -200]] // B owes A 200 = A "owes" B -200
   );
+});
+
+test('settleUpFor follows the "Simplify debts" setting', () => {
+  // A paid 200 for B; B paid 200 for C.
+  const expenses = [
+    { payers: [{ member_id: 'A', amount: 200 }], participants: [{ member_id: 'B', share: 200 }] },
+    { payers: [{ member_id: 'B', amount: 200 }], participants: [{ member_id: 'C', share: 200 }] },
+  ];
+  const balances = { A: 200, B: 0, C: -200 };
+  // On: B is skipped entirely.
+  assert.deepEqual(settleUpFor(1, balances, expenses, []), [{ fromId: 'C', toId: 'A', amount: 200 }]);
+  // Off: each person pays back exactly who they owe.
+  assert.deepEqual(settleUpFor(0, balances, expenses, []), [
+    { fromId: 'B', toId: 'A', amount: 200 },
+    { fromId: 'C', toId: 'B', amount: 200 },
+  ]);
+});
+
+test('myDebts: only the transfers about me, biggest first', () => {
+  const transfers = [
+    { fromId: 'me', toId: 'A', amount: 100 },
+    { fromId: 'B', toId: 'me', amount: 50 },
+    { fromId: 'me', toId: 'C', amount: 300 },
+    { fromId: 'A', toId: 'B', amount: 999 }, // not about me
+  ];
+  assert.deepEqual(myDebts('me', transfers), {
+    iOwe: [
+      { memberId: 'C', amount: 300 },
+      { memberId: 'A', amount: 100 },
+    ],
+    owedToMe: [{ memberId: 'B', amount: 50 }],
+  });
 });

@@ -16,9 +16,10 @@ server/
     index.js        starts the real server (connects to MongoDB, listens)
     app.js          builds the app from the route files below
     routes/
-      accounts.js   sign up, GET /me, GET /me/invites
+      accounts.js   sign up, GET /me, GET /me/invites, username search
       groups.js     upload, /changes, settings, admin roles, settle-up, history
-      invites.js    inviting by username or link, accepting, declining
+      invites.js    inviting by username or link, accepting, declining,
+                    cancelling, and the /join page shared links open
       expenses.js   add / edit / delete expenses
       payments.js   record / confirm / reject / cancel payments
     models.js       the MongoDB collections
@@ -99,6 +100,7 @@ be in the group. "admin" = and be an admin there.
 | POST | `/accounts` | anyone | `{ name, username }` → `{ account, token, device_id }` |
 | GET | `/me` | token | `{ account, groups: [{ group_id, name, member_id, role }] }` |
 | GET | `/me/invites` | token | Pending invites to my username |
+| GET | `/accounts/search?q=nis` | token | Up to 10 accounts whose username starts with `q` (2+ characters) → `{ accounts }` |
 | POST | `/groups` | token | Upload a group (body below); I become its admin → `{ group_id }` |
 | GET | `/groups/:groupId/changes?since=N&limit=M` | member | Up to M documents (default 500, max 1000) saved after seq N → `{ group, members, expenses, payments, last_seq, has_more }` |
 | PATCH | `/groups/:groupId/settings` | admin | `{ simplify_debts: true/false }` |
@@ -107,11 +109,13 @@ be in the group. "admin" = and be an admin there.
 | GET | `/groups/:groupId/settle-up` | member | `{ simplify_debts, balances, transfers }`: simplified or pairwise, per the setting |
 | GET | `/groups/:groupId/history/:aId/:bId` | member | Every expense and payment between two members, with what's left after each |
 | POST | `/groups/:groupId/invites` | admin | `{ member_id, username }`, or `{ member_id }` for a link → `{ invite, code? }` |
-| GET | `/groups/:groupId/invites` | admin | Pending invites |
+| GET | `/groups/:groupId/invites` | admin | Pending invites (with the invited `username`) |
 | POST | `/invites/:inviteId/regenerate` | admin | New code for a link invite (the old one stops working) → `{ invite, code }` |
-| GET | `/invites/:inviteId?code=...` | token | Look at an invite before answering |
+| POST | `/invites/:inviteId/revoke` | admin | Cancel a pending invite → `{ invite }` |
+| GET | `/invites/:inviteId?code=...` | token | Look at an invite before answering: group name, its members' names, who invited you |
 | POST | `/invites/:inviteId/accept` | token | `{ code }` for links → `{ group_id, member }` |
 | POST | `/invites/:inviteId/decline` | token | `{ code }` for links |
+| GET | `/join/:inviteId#<code>` | anyone | The web page a shared invite link opens; it hands over to the app (`yaarsplit://invite/...`). The code after `#` never reaches the server. |
 | POST | `/groups/:groupId/expenses` | member | `{ id, amount, category, split_type, payers, participants, ... }` |
 | PUT | `/groups/:groupId/expenses/:expenseId` | creator or admin | Edit (checked like a new one) |
 | DELETE | `/groups/:groupId/expenses/:expenseId` | creator or admin | Soft delete (`deleted: 1`) |
@@ -130,6 +134,7 @@ builds the link from the invite id and the code.
 
 **Rate limiting:** sign-ups (per IP), making invites, and looking at /
 accepting / declining invites (per account) each allow 10 requests a minute.
+Username search allows 60 a minute per account (the app searches as you type).
 More get `429` with a `Retry-After` header (seconds). On Render the phone's
 real IP comes from the `X-Forwarded-For` header (the app trusts one proxy
 hop). If friends ever get "Too many tries" without trying much, the IP being

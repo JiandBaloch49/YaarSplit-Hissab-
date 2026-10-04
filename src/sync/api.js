@@ -1,0 +1,88 @@
+// api.js — talking to the YaarSplit server over HTTP.
+//
+// One function, request(), used by the sync engine and the sign-up screen.
+// It adds the device token, sends/receives JSON, and turns every kind of
+// failure into one of two errors:
+//
+//   OfflineError  we couldn't reach the server: no internet, the request
+//                 timed out, or the server itself broke (a 5xx reply).
+//                 Nothing is wrong with the data — just try again later.
+//   ApiError      the server answered and said no (400 bad data, 401 unknown
+//                 token, 403 not allowed, 409 conflict...). `status` is the
+//                 HTTP code, `message` the server's explanation and `errors`
+//                 the list of problems, when it sent one.
+//
+// The server's address comes from EXPO_PUBLIC_API_URL (put it in a .env
+// file in the project root, see .env.example). Expo copies EXPO_PUBLIC_
+// variables into the app when it's built.
+
+import { getToken } from './account';
+
+// Used when EXPO_PUBLIC_API_URL isn't set.
+const DEFAULT_API_URL = 'https://yaarsplit-server.onrender.com';
+
+// Render's free server sleeps when unused and takes up to a minute to wake
+// up, so be patient before giving up on a request.
+const TIMEOUT_MS = 60 * 1000;
+
+export class OfflineError extends Error {}
+
+export class ApiError extends Error {
+  constructor(status, message, errors) {
+    super(message);
+    this.status = status;
+    this.errors = errors;
+  }
+}
+
+/** The server's base address, without a trailing "/". */
+export function apiUrl() {
+  return (process.env.EXPO_PUBLIC_API_URL || DEFAULT_API_URL).replace(/\/+$/, '');
+}
+
+/**
+ * Send one request. `body` (optional) is sent as JSON. Returns the parsed
+ * JSON reply, or throws OfflineError / ApiError (see the top of this file).
+ */
+export async function request(method, path, body) {
+  const headers = { Accept: 'application/json' };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  // fetch() has no timeout of its own: AbortController cancels it for us.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  let response;
+  try {
+    response = await fetch(apiUrl() + path, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch {
+    // No connection, DNS failure, or our timeout fired.
+    throw new OfflineError('Could not reach the server.');
+  } finally {
+    clearTimeout(timer);
+  }
+
+  // Every reply from our server is JSON. Anything else (e.g. a proxy's HTML
+  // error page) means the server isn't really there.
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+
+  if (response.status >= 500 || data === null) {
+    throw new OfflineError('The server is not answering properly right now.');
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, data.error || 'The server refused this.', data.errors);
+  }
+  return data;
+}

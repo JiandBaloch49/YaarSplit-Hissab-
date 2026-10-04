@@ -27,7 +27,7 @@ const tick = () => (clock += 60000);
 
 // Money into the fund: `from` gives `amount` to the holder A.
 function putIn(from, amount) {
-  return { id: `in-${from}-${clock}`, fromId: from, toId: 'A', amount, type: 'contribution', created_at: tick() };
+  return { id: `in-${from}-${clock}`, fromId: from, toId: 'A', amount, type: 'contribution', status: 'confirmed', created_at: tick() };
 }
 
 // An equal-split expense, built through prepareExpense like the app does.
@@ -107,7 +107,7 @@ test('fund: a 1500 expense when only 1000 is left — holder pays 500 extra', ()
 test('fund: a contribution, a normal expense by B, and a settlement together', () => {
   const payments = [
     putIn('B', 1000), // B gives the holder A 1000 for the fund
-    { id: 'settle', fromId: 'A', toId: 'B', amount: 200, type: 'settlement', created_at: tick() },
+    { id: 'settle', fromId: 'A', toId: 'B', amount: 200, type: 'settlement', status: 'confirmed', created_at: tick() },
   ];
   // B pays lunch 800 for A and B from their own pocket (not the fund).
   const expenses = [spend(800, 'B', ['A', 'B'], false)];
@@ -153,6 +153,7 @@ test('returning leftover: suggestions settle everyone and empty the fund', () =>
       toId: r.toId,
       amount: r.amount,
       type: 'return',
+      status: 'confirmed',
       created_at: tick(),
     })),
   ];

@@ -144,6 +144,11 @@ const expenseSchema = new Schema(
     payers: { type: [payerSchema], required: true },
     participants: { type: [participantSchema], required: true },
     from_fund: { type: Number, default: 0, enum: [0, 1] },
+    // When its contents were last edited (milliseconds), or null if never.
+    // Not the same as updated_at: that also moves when it's deleted or
+    // restored, and when an offline phone finally uploads a new expense.
+    // The app shows "Edited by Bilal, 3:20 PM" from this and updated_by.
+    edited_at: { type: Number, default: null },
   },
   options
 );

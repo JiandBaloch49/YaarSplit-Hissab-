@@ -1,8 +1,9 @@
 // loader.mjs — lets Node run the app's database code in tests.
 //
 // Two problems, two fixes:
-//   1. src/db imports 'expo-sqlite' and 'expo-crypto', which only work on a
-//      phone. We point those imports at the stand-ins in this folder.
+//   1. src/db and src/sync import 'expo-sqlite', 'expo-crypto' and
+//      'expo-secure-store', which only work on a phone. We point those
+//      imports at the stand-ins in this folder.
 //   2. The app imports files without ".js" (e.g. './database'), which the
 //      app's bundler allows but Node doesn't. We try adding ".js".
 //
@@ -12,6 +13,7 @@
 const STAND_INS = {
   'expo-sqlite': new URL('./expo-sqlite.mjs', import.meta.url).href,
   'expo-crypto': new URL('./expo-crypto.mjs', import.meta.url).href,
+  'expo-secure-store': new URL('./expo-secure-store.mjs', import.meta.url).href,
 };
 
 export async function resolve(specifier, context, nextResolve) {
