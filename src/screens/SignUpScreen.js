@@ -108,7 +108,7 @@ export default function SignUpScreen({ navigation }) {
         style={styles.input}
         value={name}
         onChangeText={setName}
-        placeholder="e.g. Nisar"
+        placeholder="e.g. Jiand Baloch"
         placeholderTextColor={colors.muted}
         autoCapitalize="words"
         returnKeyType="next"
@@ -120,7 +120,7 @@ export default function SignUpScreen({ navigation }) {
         style={styles.input}
         value={usernameText}
         onChangeText={setUsernameText}
-        placeholder="@nisar"
+        placeholder="@jiandbaloch"
         placeholderTextColor={colors.muted}
         autoCapitalize="none"
         autoCorrect={false}
