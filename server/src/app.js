@@ -4,7 +4,7 @@
 // index.js does that for the real server, and the tests do it with an
 // in-memory MongoDB. Keeping them apart is what makes the tests possible.
 //
-// Where the endpoints live:
+// Where the endpoints live (GET / and GET /health are right here):
 //   routes/accounts.js   POST /accounts, GET /me, GET /me/invites, username search
 //   routes/groups.js     upload, /changes, settings, roles, settle-up, history
 //   routes/invites.js    inviting, accepting, declining, cancelling, /join page
@@ -17,6 +17,7 @@
 // also carry the full list: { error: '...', errors: ['...', ...] }.
 
 import express from 'express';
+import mongoose from 'mongoose';
 import { byAccount, rateLimit } from './rateLimit.js';
 import { HttpError } from './errors.js';
 import { accountRoutes } from './routes/accounts.js';
@@ -56,9 +57,25 @@ export function createApp(options = {}) {
     search: rateLimit({ max: max * 6, windowMs, key: byAccount }),
   };
 
-  // --- Health check: Render (and you) can open this to see the server is up.
+  // --- Is the server up? Opening the address in a browser shows this.
   app.get('/', (req, res) => {
     res.json({ ok: true, name: 'YaarSplit server' });
+  });
+
+  // --- Health check for Render (set "Health Check Path" to /health).
+  // Unlike "/", this also asks MongoDB to answer a ping, so a server that is
+  // running but has lost its database reports itself as broken (503) and
+  // Render can restart it / hold back a bad deploy.
+  app.get('/health', async (req, res) => {
+    try {
+      // readyState 1 = connected. db is undefined before the first connect.
+      if (mongoose.connection.readyState !== 1) throw new Error('not connected');
+      await mongoose.connection.db.admin().ping();
+      res.json({ ok: true });
+    } catch {
+      // Don't send the error's details: they can include the database host.
+      res.status(503).json({ ok: false, error: 'Database not reachable.' });
+    }
   });
 
   app.use(accountRoutes(limits));

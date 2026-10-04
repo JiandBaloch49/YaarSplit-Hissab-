@@ -96,7 +96,8 @@ be in the group. "admin" = and be an admin there.
 
 | Method | Path | Who | What it does |
 |---|---|---|---|
-| GET | `/` | anyone | Health check → `{ ok: true }` |
+| GET | `/` | anyone | Is the server up? → `{ ok: true }` |
+| GET | `/health` | anyone | Health check incl. a MongoDB ping → `{ ok: true }`, or 503 `{ ok: false }` |
 | POST | `/accounts` | anyone | `{ name, username }` → `{ account, token, device_id }` |
 | GET | `/me` | token | `{ account, groups: [{ group_id, name, member_id, role }] }` |
 | GET | `/me/invites` | token | Pending invites to my username |

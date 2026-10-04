@@ -29,6 +29,11 @@ export async function startTestDb() {
   await mongoose.syncIndexes(); // same as index.js does on the real server
 }
 
+/** The in-memory database's address, to reconnect after a test disconnects. */
+export function testDbUri() {
+  return mongo.getUri();
+}
+
 /** Disconnect and throw the in-memory database away. */
 export async function stopTestDb() {
   await mongoose.disconnect();

@@ -5,6 +5,7 @@
 
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import mongoose from 'mongoose';
 import {
   api,
   auth,
@@ -13,6 +14,7 @@ import {
   sampleGroup,
   startTestDb,
   stopTestDb,
+  testDbUri,
   uploadGroup,
 } from './helpers.js';
 import { createApp } from '../src/app.js';
@@ -352,4 +354,18 @@ test('health check and unknown routes', async () => {
   const res = await api().get('/').expect(200);
   assert.equal(res.body.ok, true);
   await api().get('/nope').expect(404);
+});
+
+test('GET /health pings the database', async () => {
+  const res = await api().get('/health').expect(200);
+  assert.deepEqual(res.body, { ok: true });
+
+  // With the database gone, it must say so (Render watches for this).
+  await mongoose.disconnect();
+  try {
+    const down = await api().get('/health').expect(503);
+    assert.equal(down.body.ok, false);
+  } finally {
+    await mongoose.connect(testDbUri());
+  }
 });
