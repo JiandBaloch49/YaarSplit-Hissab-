@@ -5,7 +5,7 @@
 
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { api, auth, createAccount, joinAs, startTestDb, stopTestDb, uploadGroup } from './helpers.js';
+import { api, auth, createAccount, joinAs, sampleGroup, startTestDb, stopTestDb, uploadGroup } from './helpers.js';
 import { createApp } from '../src/app.js';
 
 before(startTestDb);
@@ -128,5 +128,25 @@ describe('GET /join/:inviteId', () => {
   test('not an invite id → 404', async () => {
     await api().get('/join/<script>').expect(404);
     await api().get('/join/123').expect(404);
+  });
+
+  // Security: group and member names are typed by users. The page must never
+  // put them in its HTML, so a name like "<script>..." can't run code there.
+  // (Today the page shows no names at all; this catches anyone adding them
+  // back without escaping.)
+  test('user-typed names with HTML in them never reach the page', async () => {
+    const evil = '<script>alert("pwned")</script><img src=x onerror=alert(1)>';
+    const { ids, body } = sampleGroup();
+    body.group.name = evil;
+    body.members.find((m) => m.id === ids.C).name = evil;
+    const admin = await createAccount('A');
+    await api().post('/groups').set(auth(admin.token)).send(body).expect(201);
+    const made = await invite({ ids, token: admin.token }, 'C').expect(201);
+
+    const res = await api().get(`/join/${made.body.invite.id}`).expect(200);
+    assert.ok(!res.text.includes('pwned'), 'group/member name leaked into the page');
+    assert.ok(!res.text.includes('onerror'), 'raw HTML from a name reached the page');
+    // The page has exactly one <script>: its own.
+    assert.equal(res.text.match(/<script/gi).length, 1);
   });
 });

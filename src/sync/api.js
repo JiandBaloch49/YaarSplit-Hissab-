@@ -12,14 +12,16 @@
 //                 HTTP code, `message` the server's explanation and `errors`
 //                 the list of problems, when it sent one.
 //
-// The server's address comes from EXPO_PUBLIC_API_URL (put it in a .env
-// file in the project root, see .env.example). Expo copies EXPO_PUBLIC_
-// variables into the app when it's built.
+// The server's address comes from EXPO_PUBLIC_API_URL. Expo copies
+// EXPO_PUBLIC_ variables into the app when it's built:
+//   - on your computer (npx expo start): from a .env file in the project
+//     root, see .env.example
+//   - EAS builds (eas build --profile preview): from the EAS environment
+//     variable of the same name, see eas.json
+// There is deliberately no built-in address, so a build that forgot to set
+// it fails loudly instead of quietly talking to the wrong server.
 
 import { getToken } from './account';
-
-// Used when EXPO_PUBLIC_API_URL isn't set.
-const DEFAULT_API_URL = 'https://yaarsplit-server.onrender.com';
 
 // Render's free server sleeps when unused and takes up to a minute to wake
 // up, so be patient before giving up on a request.
@@ -37,7 +39,11 @@ export class ApiError extends Error {
 
 /** The server's base address, without a trailing "/". */
 export function apiUrl() {
-  return (process.env.EXPO_PUBLIC_API_URL || DEFAULT_API_URL).replace(/\/+$/, '');
+  // Must be written out in full as process.env.EXPO_PUBLIC_API_URL: Expo
+  // only swaps in the value when it sees exactly that text.
+  const url = process.env.EXPO_PUBLIC_API_URL;
+  if (!url) throw new Error('EXPO_PUBLIC_API_URL is not set, so the app does not know its server.');
+  return url.replace(/\/+$/, '');
 }
 
 /**
@@ -54,9 +60,13 @@ export async function request(method, path, body) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
+  // Outside the try below: a missing server address is a setup mistake,
+  // not "offline", and shouldn't be reported as one.
+  const url = apiUrl() + path;
+
   let response;
   try {
-    response = await fetch(apiUrl() + path, {
+    response = await fetch(url, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
